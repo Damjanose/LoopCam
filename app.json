@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "LoopCam",
+    "name": "DashCam - Traffic",
     "slug": "LoopCam",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -9,12 +9,12 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.loopcam.app",
+      "bundleIdentifier": "com.damjano.dashcam",
       "infoPlist": {
-        "NSCameraUsageDescription": "LoopCam records a rolling buffer of the road ahead so you can save the last few minutes when something happens.",
-        "NSMicrophoneUsageDescription": "LoopCam records audio alongside video so saved incidents include sound.",
-        "NSLocationWhenInUseUsageDescription": "LoopCam tags saved clips with location and speed.",
-        "NSPhotoLibraryAddUsageDescription": "LoopCam exports saved clips to your photo library.",
+        "NSCameraUsageDescription": "DashCam records a rolling buffer of the road ahead so you can save the last few minutes when something happens.",
+        "NSMicrophoneUsageDescription": "DashCam records audio alongside video so saved incidents include sound.",
+        "NSLocationWhenInUseUsageDescription": "DashCam tags saved clips with location and speed.",
+        "NSPhotoLibraryAddUsageDescription": "DashCam exports saved clips to your photo library.",
         "UIBackgroundModes": [
           "audio",
           "location"
@@ -23,7 +23,7 @@
       }
     },
     "android": {
-      "package": "com.loopcam.app",
+      "package": "com.damjano.dashcam",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",

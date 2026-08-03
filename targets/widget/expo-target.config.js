@@ -14,7 +14,7 @@
 module.exports = {
   type: 'widget',
   name: 'LoopCamWidget',
-  displayName: 'LoopCam',
+  displayName: 'DashCam',
   deploymentTarget: '17.0',
   frameworks: ['SwiftUI', 'WidgetKit', 'ActivityKit', 'AppIntents'],
   colors: {
