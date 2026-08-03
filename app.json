@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "LoopCam",
+    "slug": "LoopCam",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.loopcam.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "LoopCam records a rolling buffer of the road ahead so you can save the last few minutes when something happens.",
+        "NSMicrophoneUsageDescription": "LoopCam records audio alongside video so saved incidents include sound.",
+        "NSLocationWhenInUseUsageDescription": "LoopCam tags saved clips with location and speed.",
+        "NSPhotoLibraryAddUsageDescription": "LoopCam exports saved clips to your photo library.",
+        "UIBackgroundModes": ["audio", "location"],
+        "UIRequiresFullScreen": true
+      }
+    },
+    "android": {
+      "package": "com.loopcam.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_CAMERA",
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          },
+          "ios": {
+            "deploymentTarget": "16.4"
+          }
+        }
+      ]
+    ]
+  }
+}

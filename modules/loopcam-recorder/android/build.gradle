@@ -1,0 +1,36 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.loopcamrecorder'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.loopcamrecorder"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+def cameraxVersion = "1.4.2"
+
+dependencies {
+  // §4 — CameraX drives capture; camera-video gives us hardware-encoded
+  // segments without touching MediaCodec directly.
+  implementation "androidx.camera:camera-core:$cameraxVersion"
+  implementation "androidx.camera:camera-camera2:$cameraxVersion"
+  implementation "androidx.camera:camera-lifecycle:$cameraxVersion"
+  implementation "androidx.camera:camera-video:$cameraxVersion"
+  implementation "androidx.camera:camera-view:$cameraxVersion"
+
+  // §5.1 — LifecycleService, so the foreground service can own the camera binding.
+  implementation "androidx.lifecycle:lifecycle-service:2.8.7"
+
+  // §6 — deferred cleanup/battery-safe tasks.
+  implementation "androidx.work:work-runtime-ktx:2.10.0"
+}
