@@ -10,6 +10,11 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.damjano.dashcam",
+      "icon": {
+        "light": "./assets/icon.png",
+        "dark": "./assets/ios-icon-dark.png",
+        "tinted": "./assets/ios-icon-tinted.png"
+      },
       "infoPlist": {
         "NSCameraUsageDescription": "DashCam records a rolling buffer of the road ahead so you can save the last few minutes when something happens.",
         "NSMicrophoneUsageDescription": "DashCam records audio alongside video so saved incidents include sound.",
@@ -25,7 +30,7 @@
     "android": {
       "package": "com.damjano.dashcam",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0C1429",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -68,6 +73,15 @@
         {
           "hidden": true,
           "style": "light"
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#000000",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 260,
+          "resizeMode": "contain"
         }
       ]
     ]
