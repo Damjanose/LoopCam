@@ -1,7 +1,22 @@
-import RecorderScreen from './src/screens/RecorderScreen';
+import { useState } from 'react';
 
-// TODO(phase-3): add navigation once the saved-clips gallery and settings
-// screens land; a single screen doesn't earn a navigator yet.
+import RecorderScreen from './src/screens/RecorderScreen';
+import SavedClipsScreen from './src/screens/SavedClipsScreen';
+
+/**
+ * Two screens do not earn a navigator. Swapping on state keeps the entry point
+ * dependency-free, and — because the rolling buffer is owned by the foreground
+ * service rather than the React tree — unmounting the recorder to browse saved
+ * clips does not interrupt a recording.
+ *
+ * TODO(phase-3): promote this to a real navigator once settings lands.
+ */
 export default function App() {
-  return <RecorderScreen />;
+  const [screen, setScreen] = useState<'recorder' | 'saved'>('recorder');
+
+  return screen === 'recorder' ? (
+    <RecorderScreen onOpenSaved={() => setScreen('saved')} />
+  ) : (
+    <SavedClipsScreen onBack={() => setScreen('recorder')} />
+  );
 }

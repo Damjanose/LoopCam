@@ -90,7 +90,13 @@ class ClipMerger(private val storage: StorageManager) {
       runCatching { muxer.release() }
     }
 
-    check(destination.length() > 0L) { "The merged file came out empty" }
+    // Outside the catch above, so this needs its own cleanup: a zero-byte file
+    // left behind is indistinguishable from a real incident to the saved-clips
+    // list (the directory *is* the index, §7.1) and can never be played.
+    if (destination.length() == 0L) {
+      destination.delete()
+      throw IllegalStateException("The merged file came out empty")
+    }
   }
 
   /** Copy the first clip's track formats into the muxer; that is the layout. */

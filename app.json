@@ -15,7 +15,10 @@
         "NSMicrophoneUsageDescription": "LoopCam records audio alongside video so saved incidents include sound.",
         "NSLocationWhenInUseUsageDescription": "LoopCam tags saved clips with location and speed.",
         "NSPhotoLibraryAddUsageDescription": "LoopCam exports saved clips to your photo library.",
-        "UIBackgroundModes": ["audio", "location"],
+        "UIBackgroundModes": [
+          "audio",
+          "location"
+        ],
         "UIRequiresFullScreen": true
       }
     },
@@ -55,7 +58,8 @@
             "deploymentTarget": "16.4"
           }
         }
-      ]
+      ],
+      "expo-video"
     ]
   }
 }

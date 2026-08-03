@@ -44,6 +44,11 @@ class SegmentController(
   private var clipGeneration = 0
   private var consecutiveClipFailures = 0
 
+  /** Saves waiting for the clip they cut short to finish finalizing. */
+  private val pendingSaves = mutableListOf<PendingSave>()
+
+  private class PendingSave(val trigger: SaveTrigger, val onResult: (Result<SavedClip>) -> Unit)
+
   fun configure(newConfig: RecorderConfig) = executor.execute {
     config = newConfig
     // Resizing live keeps a mid-drive settings change from restarting capture;
@@ -113,6 +118,9 @@ class SegmentController(
     clipGeneration++
     emitState()
 
+    // STOP discards the in-flight clip, so anything waiting on it never gets
+    // its file; resolve those saves now instead of stranding them.
+    failPendingSaves("Recording stopped before the clip could be saved")
     recorder.stopClip(discard = true)
     recorder.release()
     buffer.drain().forEach { it.file.delete() }
@@ -126,20 +134,48 @@ class SegmentController(
 
   /**
    * SAVE — freeze the window, merge it on the background queue, and start a
-   * fresh buffer immediately. Recording never pauses (§2.3); the in-progress
-   * clip is deliberately excluded from the snapshot so a merge can never read a
-   * half-written file (§10), and it simply becomes the first clip of the new
-   * window.
+   * fresh buffer immediately. Recording never pauses (§2.3).
+   *
+   * The in-flight clip is *cut* first rather than skipped. Only finished clips
+   * may be merged (§10), but simply ignoring the live one means the footage
+   * since the last boundary is lost — and for the first `clipDurationSec` of a
+   * session, or in any window straight after a Save, that is everything there
+   * is. Pressing Save one second in has to keep that second, so the clip is
+   * closed properly and the merge waits for it.
    */
   fun save(trigger: SaveTrigger, onResult: (Result<SavedClip>) -> Unit) = executor.execute {
     if (state != RecorderState.RECORDING) {
       onResult(Result.failure(IllegalStateException("Not recording")))
       return@execute
     }
+    pendingSaves += PendingSave(trigger, onResult)
+    // Retires the boundary already scheduled for this clip, so that it cannot
+    // fire later and cut the *next* clip short.
+    clipGeneration++
+    recorder.stopClip(discard = false)
+  }
+
+  /**
+   * Resolve every Save waiting on the clip that was just cut.
+   *
+   * Runs on the executor after that clip has landed in the buffer, so the
+   * window this snapshots is exactly the footage the user asked for. Several
+   * waiting saves share one merge: merging twice would hand the same files to
+   * two jobs that each delete them when done.
+   */
+  private fun flushPendingSaves() {
+    if (pendingSaves.isEmpty()) return
+    val waiting = pendingSaves.toList()
+    pendingSaves.clear()
+
     val snapshot = buffer.snapshot()
     if (snapshot.isEmpty()) {
-      onResult(Result.failure(IllegalStateException("Buffer is empty")))
-      return@execute
+      // Only reachable when the cut clip yielded no usable file at all — a tap
+      // landing within a few frames of Play, or an encoder that dropped the
+      // segment outright.
+      val error = IllegalStateException("Nothing recorded yet — try again in a moment")
+      waiting.forEach { it.onResult(Result.failure(error)) }
+      return
     }
     // The new window starts here; ownership of the snapshot's files passes to
     // the merge, which deletes them once the merged file is on disk.
@@ -147,6 +183,7 @@ class SegmentController(
     emitState()
 
     val destination = storage.savedFile()
+    val trigger = waiting.first().trigger
     mergeExecutor.execute {
       val result = runCatching { merger.merge(snapshot, destination, config, trigger) }
       result
@@ -155,8 +192,16 @@ class SegmentController(
           listener.onSaved(clip)
         }
         .onFailure { fail(RecorderErrorCode.MERGE_FAILED, it) }
-      onResult(result)
+      waiting.forEach { it.onResult(result) }
     }
+  }
+
+  /** Never leave a Save promise unresolved — JS would hang on it forever. */
+  private fun failPendingSaves(reason: String) {
+    if (pendingSaves.isEmpty()) return
+    val waiting = pendingSaves.toList()
+    pendingSaves.clear()
+    waiting.forEach { it.onResult(Result.failure(IllegalStateException(reason))) }
   }
 
   fun release() {
@@ -206,6 +251,8 @@ class SegmentController(
     }
     listener.onClipFinished(status())
     startNextClip()
+    // After the new clip is rolling, so a Save never costs the buffer a frame.
+    flushPendingSaves()
   }
 
   /**
@@ -218,6 +265,9 @@ class SegmentController(
     if (state != RecorderState.RECORDING) return
     consecutiveClipFailures++
     fail(RecorderErrorCode.UNKNOWN, error)
+    // A Save that cut this clip is waiting on a file that will never arrive.
+    // Merge whatever complete clips the window still holds rather than hang.
+    flushPendingSaves()
 
     if (consecutiveClipFailures >= MAX_CONSECUTIVE_CLIP_FAILURES) {
       fail(

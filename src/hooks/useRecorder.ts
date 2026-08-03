@@ -87,10 +87,62 @@ export function useRecorder() {
   );
 
   const isRecording = status.state === 'recording' || status.state === 'saving';
+
+  /**
+   * Native only emits on real events — a clip boundary, a state change — which
+   * is every `clipDurationSec` seconds. Rendering `status` alone therefore
+   * leaves the clock reading 00:00 for the first ten seconds of a drive, which
+   * makes a running recorder look broken.
+   *
+   * So the seconds are advanced locally between events. Native stays the source
+   * of truth: every event resets this to whatever it reports, and the tick only
+   * fills the silence in between.
+   */
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!isRecording) {
+      setTick(0);
+      return;
+    }
+    const started = Date.now();
+    const id = setInterval(() => setTick((Date.now() - started) / 1000), 1000);
+    return () => clearInterval(id);
+    // Restarting on every event is the point: each one re-bases the tick.
+  }, [isRecording, status]);
+
+  const liveStatus = useMemo<BufferStatus>(() => {
+    if (!isRecording) return status;
+    return {
+      ...status,
+      elapsedSec: status.elapsedSec + tick,
+      // Footage Save would keep also includes the clip being written right now.
+      bufferedSec: Math.min(
+        status.bufferedSec + tick,
+        config.bufferDurationSec,
+      ),
+    };
+  }, [config.bufferDurationSec, isRecording, status, tick]);
+  // Time, not clip count: the meter answers "how much footage would Save keep",
+  // and counting clips makes it jump a whole segment at a time.
   const bufferFill = useMemo(
-    () => (status.maxClips === 0 ? 0 : Math.min(1, status.clipCount / status.maxClips)),
-    [status.clipCount, status.maxClips],
+    () =>
+      config.bufferDurationSec === 0
+        ? 0
+        : Math.min(1, liveStatus.bufferedSec / config.bufferDurationSec),
+    [config.bufferDurationSec, liveStatus.bufferedSec],
   );
 
-  return { config, applyConfig, status, isRecording, bufferFill, lastSaved, error, busy, play, stop, save };
+  return {
+    config,
+    applyConfig,
+    status: liveStatus,
+    isRecording,
+    bufferFill,
+    lastSaved,
+    error,
+    busy,
+    play,
+    stop,
+    save,
+  };
 }

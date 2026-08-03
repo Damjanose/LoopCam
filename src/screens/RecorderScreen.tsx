@@ -1,5 +1,19 @@
 import { StatusBar } from 'expo-status-bar';
-import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import {
+  Pressable,
+  SafeAreaView,
+  StatusBar as RNStatusBar,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+
+/**
+ * The activity is edge-to-edge, and RN's SafeAreaView does not inset on
+ * Android, so anything at the top of the screen lands under the system clock
+ * and battery icons unless it is pushed down by hand.
+ */
+export const STATUS_BAR_INSET = RNStatusBar.currentHeight ?? 0;
 
 import { LoopcamRecorderView } from '../../modules/loopcam-recorder';
 import { useRecorder } from '../hooks/useRecorder';
@@ -14,7 +28,7 @@ const formatDuration = (seconds: number) => {
  * Everything is sized for a single glance at arm's length — no small text, no
  * controls that need aim.
  */
-export default function RecorderScreen() {
+export default function RecorderScreen({ onOpenSaved }: { onOpenSaved: () => void }) {
   const { status, isRecording, bufferFill, lastSaved, error, busy, config, play, stop, save } =
     useRecorder();
 
@@ -28,6 +42,15 @@ export default function RecorderScreen() {
           <View style={styles.headerRow}>
             <View style={[styles.dot, isRecording && styles.dotLive]} />
             <Text style={styles.elapsed}>{formatDuration(status.elapsedSec)}</Text>
+            {/* Reachable mid-drive on purpose: browsing saved clips never
+                interrupts the buffer. */}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Saved clips"
+              onPress={onOpenSaved}
+              style={({ pressed }) => [styles.savedLink, pressed && styles.buttonPressed]}>
+              <Text style={styles.savedLinkLabel}>Saved</Text>
+            </Pressable>
           </View>
           <Text style={styles.caption}>
             {isRecording
@@ -102,8 +125,16 @@ function Control({
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
   overlay: { flex: 1, justifyContent: 'space-between' },
-  header: { paddingHorizontal: 24, paddingTop: 16, gap: 8 },
+  header: { paddingHorizontal: 24, paddingTop: STATUS_BAR_INSET + 16, gap: 8 },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  savedLink: {
+    marginLeft: 'auto',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  savedLinkLabel: { color: '#fff', fontSize: 16, fontWeight: '600' },
   dot: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#555' },
   dotLive: { backgroundColor: '#ff3b30' },
   elapsed: { color: '#fff', fontSize: 34, fontVariant: ['tabular-nums'], fontWeight: '600' },

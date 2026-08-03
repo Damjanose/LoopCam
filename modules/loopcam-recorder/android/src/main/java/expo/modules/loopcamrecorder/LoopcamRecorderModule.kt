@@ -1,7 +1,9 @@
 package expo.modules.loopcamrecorder
 
 import android.Manifest
+import android.media.MediaMetadataRetriever
 import android.os.Build
+import android.util.Log
 import expo.modules.interfaces.permissions.PermissionsStatus
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.Exceptions
@@ -216,7 +218,11 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
    * sidecar per incident. No database to fall out of sync with disk.
    */
   private fun savedClips(): List<SavedClip> {
-    val files = storage.savedRoot.listFiles { f: File -> f.extension == "mp4" } ?: return emptyList()
+    // Empty files are skipped rather than listed: a merge interrupted by a
+    // process death can still leave one, and an unplayable row in the gallery
+    // is worse than a missing one.
+    val files = storage.savedRoot.listFiles { f: File -> f.extension == "mp4" && f.length() > 0L }
+      ?: return emptyList()
     return files.sortedByDescending { it.lastModified() }.map { file ->
       val sidecar = storage.metadataFileFor(file)
       SavedClip(
@@ -224,8 +230,7 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
         uri = file.toURI().toString(),
         metadataUri = if (sidecar.exists()) sidecar.toURI().toString() else null,
         createdAtMs = file.lastModified(),
-        // TODO(phase-3): read the real duration via MediaMetadataRetriever.
-        durationSec = 0.0,
+        durationSec = durationSecOf(file),
         sizeBytes = file.length(),
         isProtected = protectedIds.contains(file.nameWithoutExtension),
         trigger = SaveTrigger.MANUAL,
@@ -233,7 +238,29 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
     }
   }
 
+  /**
+   * The container is the only honest source for how long a saved clip runs: the
+   * merge concatenates a variable number of segments, and the last one is
+   * usually cut short by the Save itself, so no arithmetic over the config
+   * predicts it. A file that cannot be read reports 0 rather than guessing.
+   */
+  private fun durationSecOf(file: File): Double {
+    val retriever = MediaMetadataRetriever()
+    return try {
+      retriever.setDataSource(file.absolutePath)
+      val ms = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+      if (ms == null) 0.0 else ms / 1000.0
+    } catch (t: Throwable) {
+      Log.w(TAG, "Could not read duration from ${file.name}", t)
+      0.0
+    } finally {
+      runCatching { retriever.release() }
+    }
+  }
+
   companion object {
+    private const val TAG = "LoopCam/Module"
+
     /** Shared with [RecordingService] so notification actions hit the live loop. */
     @JvmStatic
     var controller: SegmentController? = null
