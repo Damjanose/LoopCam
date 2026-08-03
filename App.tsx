@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { NavigationBar } from 'expo-navigation-bar';
 
 import RecorderScreen from './src/screens/RecorderScreen';
 import SavedClipsScreen from './src/screens/SavedClipsScreen';
@@ -14,9 +15,16 @@ import SavedClipsScreen from './src/screens/SavedClipsScreen';
 export default function App() {
   const [screen, setScreen] = useState<'recorder' | 'saved'>('recorder');
 
-  return screen === 'recorder' ? (
-    <RecorderScreen onOpenSaved={() => setScreen('saved')} />
-  ) : (
-    <SavedClipsScreen onBack={() => setScreen('recorder')} />
+  return (
+    <>
+      {/* Android only: immersive-sticky, so a swipe reveals the bar transiently
+          and it re-hides itself. No-op on iOS. */}
+      <NavigationBar hidden style="light" />
+      {screen === 'recorder' ? (
+        <RecorderScreen onOpenSaved={() => setScreen('saved')} />
+      ) : (
+        <SavedClipsScreen onBack={() => setScreen('recorder')} />
+      )}
+    </>
   );
 }

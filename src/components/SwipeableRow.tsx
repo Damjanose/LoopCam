@@ -5,7 +5,7 @@ import { Animated, PanResponder, Pressable, StyleSheet, Text, View } from 'react
 const ACTION_WIDTH = 88;
 /** Drag this far and releasing parks the row open instead of springing back. */
 const OPEN_RATIO = 0.2;
-/** Drag past this and releasing commits the delete outright (Gmail-style). */
+/** Drag past this and releasing fires the action outright (Gmail-style). */
 const COMMIT_RATIO = 0.5;
 /** A fast flick past the open threshold counts as a commit too. */
 const FLING_VX = 0.7;
@@ -13,7 +13,7 @@ const FLING_VX = 0.7;
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 /**
- * One swipe-to-delete row.
+ * One two-sided swipe row: left uncovers Delete, right uncovers Share.
  *
  * Built on PanResponder rather than react-native-gesture-handler: this app
  * ships a custom native module and a dev client, so pulling in a new native
@@ -26,12 +26,15 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 export default function SwipeableRow({
   children,
   onDelete,
+  onShare,
   open,
   onOpenChange,
 }: {
   children: ReactNode;
   /** Called once the row has slid away; the caller drops it from the list. */
   onDelete: () => void;
+  /** Opens the share sheet. Non-destructive, so the row springs back first. */
+  onShare: () => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -40,6 +43,17 @@ export default function SwipeableRow({
   // second swipe on an already-open row continues rather than restarts.
   const restingX = useRef(0);
   const width = useRef(0);
+
+  // The responder is created once, so it reads its callbacks through refs
+  // instead of capturing the first render's props.
+  const onDeleteRef = useRef(onDelete);
+  const onShareRef = useRef(onShare);
+  const onOpenChangeRef = useRef(onOpenChange);
+  useEffect(() => {
+    onDeleteRef.current = onDelete;
+    onShareRef.current = onShare;
+    onOpenChangeRef.current = onOpenChange;
+  });
 
   const settle = useRef((to: number) => {
     restingX.current = to;
@@ -51,25 +65,23 @@ export default function SwipeableRow({
     }).start();
   }).current;
 
-  const commit = useRef(() => {
-    restingX.current = -(width.current || ACTION_WIDTH);
-    Animated.timing(translateX, {
-      toValue: -(width.current || ACTION_WIDTH),
-      duration: 160,
-      useNativeDriver: true,
-    }).start(({ finished }) => {
-      if (finished) onDeleteRef.current();
-    });
+  /** Delete is destructive, so the row leaves before the caller is told. */
+  const commitDelete = useRef(() => {
+    const to = -(width.current || ACTION_WIDTH);
+    restingX.current = to;
+    Animated.timing(translateX, { toValue: to, duration: 160, useNativeDriver: true }).start(
+      ({ finished }) => {
+        if (finished) onDeleteRef.current();
+      },
+    );
   }).current;
 
-  // The responder is created once, so it reads its callbacks through refs
-  // instead of capturing the first render's props.
-  const onDeleteRef = useRef(onDelete);
-  const onOpenChangeRef = useRef(onOpenChange);
-  useEffect(() => {
-    onDeleteRef.current = onDelete;
-    onOpenChangeRef.current = onOpenChange;
-  });
+  /** Share leaves the row in place — the sheet is the feedback. */
+  const commitShare = useRef(() => {
+    settle(0);
+    onOpenChangeRef.current(false);
+    onShareRef.current();
+  }).current;
 
   const responder = useMemo(
     () =>
@@ -79,17 +91,22 @@ export default function SwipeableRow({
         onMoveShouldSetPanResponder: (_, g) =>
           Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
         onPanResponderMove: (_, g) => {
-          translateX.setValue(clamp(restingX.current + g.dx, -(width.current || ACTION_WIDTH), 0));
+          const limit = width.current || ACTION_WIDTH;
+          translateX.setValue(clamp(restingX.current + g.dx, -limit, limit));
         },
         onPanResponderRelease: (_, g) => {
           const w = width.current || ACTION_WIDTH;
-          const dragged = -clamp(restingX.current + g.dx, -w, 0);
-          const flung = g.vx < -FLING_VX && dragged > w * OPEN_RATIO;
+          const offset = clamp(restingX.current + g.dx, -w, w);
+          const dragged = Math.abs(offset);
+          // A flick commits in whichever direction it is actually travelling,
+          // which is not always the side currently uncovered.
+          const flung = Math.abs(g.vx) > FLING_VX && Math.sign(g.vx) === Math.sign(offset);
 
-          if (dragged >= w * COMMIT_RATIO || flung) {
-            commit();
+          if (dragged >= w * COMMIT_RATIO || (flung && dragged > w * OPEN_RATIO)) {
+            if (offset < 0) commitDelete();
+            else commitShare();
           } else if (dragged >= w * OPEN_RATIO) {
-            settle(-ACTION_WIDTH);
+            settle(offset < 0 ? -ACTION_WIDTH : ACTION_WIDTH);
             onOpenChangeRef.current(true);
           } else {
             settle(0);
@@ -98,18 +115,35 @@ export default function SwipeableRow({
         },
         onPanResponderTerminate: () => settle(restingX.current),
       }),
-    [commit, settle, translateX],
+    [commitDelete, commitShare, settle, translateX],
   );
 
   useEffect(() => {
     if (!open && restingX.current !== 0) settle(0);
   }, [open, settle]);
 
-  // The action fades in as the row uncovers it, so a half-committed swipe reads
-  // as "this is about to delete" rather than a bare red slab.
-  const actionOpacity = translateX.interpolate({
+  // Each action fades in as the row uncovers it, so a half-committed swipe
+  // reads as "this is about to happen" rather than a bare coloured slab.
+  const deleteOpacity = translateX.interpolate({
     inputRange: [-ACTION_WIDTH, -ACTION_WIDTH * 0.35, 0],
     outputRange: [1, 0.7, 0.3],
+    extrapolate: 'clamp',
+  });
+  const shareOpacity = translateX.interpolate({
+    inputRange: [0, ACTION_WIDTH * 0.35, ACTION_WIDTH],
+    outputRange: [0.3, 0.7, 1],
+    extrapolate: 'clamp',
+  });
+  // Only the uncovered side should be painted; otherwise the far edge of the
+  // row shows the wrong colour behind the rounded corners.
+  const deleteSide = translateX.interpolate({
+    inputRange: [-1, 0, 1],
+    outputRange: [1, 0, 0],
+    extrapolate: 'clamp',
+  });
+  const shareSide = translateX.interpolate({
+    inputRange: [-1, 0, 1],
+    outputRange: [0, 0, 1],
     extrapolate: 'clamp',
   });
 
@@ -119,34 +153,55 @@ export default function SwipeableRow({
       onLayout={(e) => {
         width.current = e.nativeEvent.layout.width;
       }}>
-      <Animated.View style={[styles.action, { opacity: actionOpacity }]}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Delete recording"
-          onPress={() => onDeleteRef.current()}
-          style={({ pressed }) => [styles.actionButton, pressed && styles.actionPressed]}>
-          <Text style={styles.actionGlyph}>🗑</Text>
-          <Text style={styles.actionLabel}>Delete</Text>
-        </Pressable>
+      <Animated.View
+        style={[styles.actionLayer, styles.shareLayer, { opacity: shareSide }]}
+        pointerEvents="box-none">
+        <Animated.View style={[styles.actionSlot, styles.shareSlot, { opacity: shareOpacity }]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Share recording"
+            onPress={() => onShareRef.current()}
+            style={({ pressed }) => [styles.actionButton, pressed && styles.pressed]}>
+            <Text style={styles.actionGlyph}>📤</Text>
+            <Text style={styles.actionLabel}>Share</Text>
+          </Pressable>
+        </Animated.View>
       </Animated.View>
 
-      <Animated.View style={[styles.content, { transform: [{ translateX }] }]} {...responder.panHandlers}>
+      <Animated.View
+        style={[styles.actionLayer, styles.deleteLayer, { opacity: deleteSide }]}
+        pointerEvents="box-none">
+        <Animated.View style={[styles.actionSlot, styles.deleteSlot, { opacity: deleteOpacity }]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Delete recording"
+            onPress={() => onDeleteRef.current()}
+            style={({ pressed }) => [styles.actionButton, pressed && styles.pressed]}>
+            <Text style={styles.actionGlyph}>🗑</Text>
+            <Text style={styles.actionLabel}>Delete</Text>
+          </Pressable>
+        </Animated.View>
+      </Animated.View>
+
+      <Animated.View
+        style={[styles.content, { transform: [{ translateX }] }]}
+        {...responder.panHandlers}>
         {children}
       </Animated.View>
     </View>
   );
 }
 
+const fill = { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 } as const;
+
 const styles = StyleSheet.create({
-  root: { borderRadius: 14, overflow: 'hidden', backgroundColor: '#ff453a' },
-  action: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    alignItems: 'flex-end',
-  },
+  root: { borderRadius: 14, overflow: 'hidden', backgroundColor: '#141414' },
+  actionLayer: { ...fill },
+  shareLayer: { backgroundColor: '#0a84ff', alignItems: 'flex-start' },
+  deleteLayer: { backgroundColor: '#ff453a', alignItems: 'flex-end' },
+  actionSlot: { height: '100%', width: ACTION_WIDTH },
+  shareSlot: { alignItems: 'flex-start' },
+  deleteSlot: { alignItems: 'flex-end' },
   actionButton: {
     width: ACTION_WIDTH,
     height: '100%',
@@ -154,10 +209,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 4,
   },
-  actionPressed: { opacity: 0.6 },
-  actionGlyph: { fontSize: 20 },
+  pressed: { opacity: 0.6 },
+  actionGlyph: { fontSize: 20, color: '#fff' },
   actionLabel: { color: '#fff', fontSize: 13, fontWeight: '600' },
-  // Opaque on purpose: a translucent row would let the red action show through
+  // Opaque on purpose: a translucent row would let the actions show through
   // while it slides.
   content: { backgroundColor: '#141414' },
 });

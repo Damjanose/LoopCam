@@ -1,3 +1,4 @@
+import * as Sharing from 'expo-sharing';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -111,6 +112,31 @@ export default function SavedClipsScreen({ onBack }: { onBack: () => void }) {
     [clips, flushPending],
   );
 
+  const share = useCallback(
+    async (clip: SavedClip) => {
+      // Sharing is another deliberate action, so it confirms any pending delete
+      // rather than leaving two things in flight.
+      flushPending();
+      setOpenId(null);
+      try {
+        if (!(await Sharing.isAvailableAsync())) {
+          Alert.alert('Sharing unavailable', 'This device has no share sheet available.');
+          return;
+        }
+        // expo-sharing hands the app-private file to the system through its own
+        // FileProvider, so the file:// URI needs no extra plumbing.
+        await Sharing.shareAsync(clip.uri, {
+          mimeType: 'video/mp4',
+          UTI: 'public.mpeg-4',
+          dialogTitle: `Share recording from ${formatWhen(clip.createdAtMs)}`,
+        });
+      } catch (e) {
+        Alert.alert('Could not share', e instanceof Error ? e.message : String(e));
+      }
+    },
+    [flushPending],
+  );
+
   const undo = useCallback(() => {
     const entry = pendingRef.current;
     if (!entry) return;
@@ -179,12 +205,13 @@ export default function SavedClipsScreen({ onBack }: { onBack: () => void }) {
           renderItem={({ item }) => (
             <SwipeableRow
               onDelete={() => remove(item)}
+              onShare={() => void share(item)}
               open={openId === item.id}
               onOpenChange={(open) => setOpenId(open ? item.id : null)}>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Play clip from ${formatWhen(item.createdAtMs)}`}
-                accessibilityHint="Swipe left to delete"
+                accessibilityHint="Swipe left to delete, right to share"
                 // Tapping an open row closes it rather than starting playback,
                 // so the revealed Delete can't be hit by accident.
                 onPress={() => (openId === item.id ? setOpenId(null) : setPlaying(item))}

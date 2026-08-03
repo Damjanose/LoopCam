@@ -59,7 +59,15 @@
           }
         }
       ],
-      "expo-video"
+      "expo-video",
+      "expo-sharing",
+      [
+        "expo-navigation-bar",
+        {
+          "hidden": true,
+          "style": "light"
+        }
+      ]
     ]
   }
 }
