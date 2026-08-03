@@ -37,6 +37,13 @@ class SegmentController(
   private var clipIndex = 0
   private var startedAtMs = 0L
 
+  /**
+   * Bumped for every clip so a boundary scheduled for a clip that already ended
+   * early (an encoder error, say) cannot cut the *next* clip short.
+   */
+  private var clipGeneration = 0
+  private var consecutiveClipFailures = 0
+
   fun configure(newConfig: RecorderConfig) = executor.execute {
     config = newConfig
     // Resizing live keeps a mid-drive settings change from restarting capture;
@@ -56,27 +63,54 @@ class SegmentController(
     elapsedSec = if (startedAtMs == 0L) 0.0 else (now() - startedAtMs) / 1000.0,
   )
 
-  /** PLAY — clear leftover temp clips, start the segment loop (§2.3). */
-  fun start() = executor.execute {
-    if (state != RecorderState.IDLE) return@execute
+  /**
+   * PLAY — clear leftover temp clips, start the segment loop (§2.3).
+   *
+   * [onResult] fires on this executor once the outcome is settled, so the
+   * caller's promise resolves with the state that actually took effect rather
+   * than a snapshot racing the executor.
+   */
+  fun start(onResult: (Result<BufferStatus>) -> Unit = {}) = executor.execute {
+    if (state != RecorderState.IDLE) {
+      onResult(Result.success(status()))
+      return@execute
+    }
     storage.cleanupOrphanedSessions()
-    val id = UUID.randomUUID().toString().take(8)
-    sessionId = id
+    sessionId = UUID.randomUUID().toString().take(8)
     clipIndex = 0
-    startedAtMs = now()
+    consecutiveClipFailures = 0
     buffer = RingBuffer(config.maxClips)
-    state = RecorderState.RECORDING
-    emitState()
 
+    // State only advances once the camera is actually bound — reporting
+    // "recording" before prepare() succeeds leaves the UI claiming a live
+    // buffer that does not exist.
     runCatching { recorder.prepare(config) }
-      .onFailure { fail(RecorderErrorCode.CAMERA_UNAVAILABLE, it) }
-      .onSuccess { startNextClip() }
+      .onSuccess {
+        startedAtMs = now()
+        state = RecorderState.RECORDING
+        emitState()
+        startNextClip()
+        onResult(Result.success(status()))
+      }
+      .onFailure { error ->
+        sessionId?.let(storage::deleteSession)
+        sessionId = null
+        startedAtMs = 0L
+        state = RecorderState.IDLE
+        emitState()
+        fail(RecorderErrorCode.CAMERA_UNAVAILABLE, error)
+        onResult(Result.failure(error))
+      }
   }
 
   /** STOP — cancel the in-flight clip, delete the entire buffer (§2.3). */
-  fun stop() = executor.execute {
-    if (state == RecorderState.IDLE) return@execute
+  fun stop(onResult: (BufferStatus) -> Unit = {}) = executor.execute {
+    if (state == RecorderState.IDLE) {
+      onResult(status())
+      return@execute
+    }
     state = RecorderState.STOPPING
+    clipGeneration++
     emitState()
 
     recorder.stopClip(discard = true)
@@ -87,6 +121,7 @@ class SegmentController(
     startedAtMs = 0L
     state = RecorderState.IDLE
     emitState()
+    onResult(status())
   }
 
   /**
@@ -135,15 +170,20 @@ class SegmentController(
   private fun startNextClip() {
     val session = sessionId ?: return
     val output = storage.clipFile(session, ++clipIndex)
+    val generation = ++clipGeneration
     recorder.startClip(
       output = output,
       onFinished = { clip -> executor.execute { onClipFinished(clip) } },
-      onError = { error -> executor.execute { fail(RecorderErrorCode.UNKNOWN, error) } },
+      onError = { error -> executor.execute { onClipFailed(error) } },
     )
     // The clip boundary is scheduled, not polled — nothing wakes the CPU every
     // second just to check the buffer (§6).
     executor.schedule(
-      { if (state == RecorderState.RECORDING) recorder.stopClip(discard = false) },
+      {
+        if (state == RecorderState.RECORDING && clipGeneration == generation) {
+          recorder.stopClip(discard = false)
+        }
+      },
       (config.clipDurationSec * 1000).toLong(),
       TimeUnit.MILLISECONDS,
     )
@@ -158,6 +198,7 @@ class SegmentController(
       clip.file.delete()
       return
     }
+    consecutiveClipFailures = 0
     buffer.push(clip)?.let { evicted ->
       if (!evicted.file.delete()) {
         Log.w(TAG, "Failed to delete evicted clip ${evicted.file.name}")
@@ -165,6 +206,33 @@ class SegmentController(
     }
     listener.onClipFinished(status())
     startNextClip()
+  }
+
+  /**
+   * A clip that fails to finalize costs one clip, not the drive: the loop rolls
+   * into the next segment. Only a run of failures — a camera that is genuinely
+   * gone — stops the session, so the buffer never sits silently dead while the
+   * UI still shows "recording".
+   */
+  private fun onClipFailed(error: Throwable) {
+    if (state != RecorderState.RECORDING) return
+    consecutiveClipFailures++
+    fail(RecorderErrorCode.UNKNOWN, error)
+
+    if (consecutiveClipFailures >= MAX_CONSECUTIVE_CLIP_FAILURES) {
+      fail(
+        RecorderErrorCode.CAMERA_UNAVAILABLE,
+        IllegalStateException("Recording stopped after $consecutiveClipFailures failed clips"),
+      )
+      stop()
+      return
+    }
+
+    executor.schedule(
+      { if (state == RecorderState.RECORDING) startNextClip() },
+      CLIP_RETRY_DELAY_MS,
+      TimeUnit.MILLISECONDS,
+    )
   }
 
   private fun emitState() = listener.onStateChanged(status())
@@ -178,6 +246,10 @@ class SegmentController(
 
   private companion object {
     const val TAG = "LoopCam/Segment"
+
+    /** A run this long means the camera is gone, not glitching. */
+    const val MAX_CONSECUTIVE_CLIP_FAILURES = 3
+    const val CLIP_RETRY_DELAY_MS = 500L
   }
 }
 

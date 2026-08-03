@@ -32,8 +32,21 @@ class StorageManager(private val context: Context) {
   fun clipFile(sessionId: String, index: Int): File =
     File(sessionDir(sessionId), "clip_%04d.mp4".format(index))
 
-  fun savedFile(timestamp: Date = Date()): File =
-    File(savedRoot, "Incident_${TIMESTAMP_FORMAT.format(timestamp)}.mp4")
+  /**
+   * The timestamp only resolves to the second, so two saves inside the same
+   * second would otherwise overwrite each other — and the filename is the
+   * clip's identity (§7.1), so a collision loses an incident outright.
+   */
+  fun savedFile(timestamp: Date = Date()): File {
+    val stamp = synchronized(TIMESTAMP_FORMAT) { TIMESTAMP_FORMAT.format(timestamp) }
+    var candidate = File(savedRoot, "Incident_$stamp.mp4")
+    var suffix = 2
+    while (candidate.exists()) {
+      candidate = File(savedRoot, "Incident_${stamp}_$suffix.mp4")
+      suffix++
+    }
+    return candidate
+  }
 
   fun metadataFileFor(video: File): File =
     File(video.parentFile, video.nameWithoutExtension + ".json")

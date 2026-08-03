@@ -2,7 +2,6 @@ package expo.modules.loopcamrecorder
 
 import android.Manifest
 import android.os.Build
-import androidx.lifecycle.LifecycleOwner
 import expo.modules.interfaces.permissions.PermissionsStatus
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.Exceptions
@@ -23,6 +22,7 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
   private val context get() = appContext.reactContext ?: throw Exceptions.ReactContextLost()
 
   private val storage by lazy { StorageManager(context) }
+  private val cameraRecorder by lazy { CameraXSegmentRecorder(context) }
   private val protectedIds = mutableSetOf<String>()
 
   override fun definition() = ModuleDefinition {
@@ -37,8 +37,12 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
     }
 
     OnDestroy {
+      // A reload leaves the service and the camera bound to a controller that
+      // no longer has anywhere to report; tear the whole thing down.
       controller?.release()
       controller = null
+      cameraRecorder.lifecycleOwner = null
+      runCatching { RecordingService.stop(context) }
     }
 
     AsyncFunction("configure") { config: RecorderConfig ->
@@ -50,13 +54,17 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
     }
 
     AsyncFunction("requestPermissions") { promise: Promise ->
-      val permissions = buildList {
-        add(Manifest.permission.CAMERA)
-        add(Manifest.permission.RECORD_AUDIO)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-          add("android.permission.FOREGROUND_SERVICE_CAMERA")
-        }
-      }.toTypedArray()
+      // Only camera and mic gate recording. POST_NOTIFICATIONS is asked for at
+      // the same time because the foreground service is invisible without it,
+      // but a refusal must not block the drive. FOREGROUND_SERVICE_CAMERA is
+      // install-time, not runtime — asking for it here would resolve false and
+      // lock Play out entirely.
+      val required = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+      val optional = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        arrayOf(Manifest.permission.POST_NOTIFICATIONS)
+      } else {
+        emptyArray()
+      }
       // TODO(phase-2): also prompt for ACCESS_FINE_LOCATION when GPS tagging is
       // on, and deep-link OEM battery-whitelist screens on first run (§10).
       val permissionsManager = appContext.permissions
@@ -64,25 +72,47 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
         promise.resolve(false)
       } else {
         permissionsManager.askForPermissions({ result ->
-          promise.resolve(result.values.all { it.status == PermissionsStatus.GRANTED })
-        }, *permissions)
+          promise.resolve(required.all { result[it]?.status == PermissionsStatus.GRANTED })
+        }, *(required + optional))
       }
     }
 
-    /** PLAY. */
-    AsyncFunction("start") {
-      RecordingService.start(context)
-      val segmentController = requireController()
-      segmentController.start()
-      segmentController.status().toMap()
+    /**
+     * PLAY — the foreground service must be up *before* the camera binds, since
+     * it is the LifecycleOwner that keeps the session alive in the background
+     * (§5.1).
+     */
+    AsyncFunction("start") { promise: Promise ->
+      RecordingService.startAndAwait(context) { service ->
+        if (service == null) {
+          promise.reject(
+            "ERR_SERVICE_START",
+            "The LoopCam recording service did not start",
+            null,
+          )
+          return@startAndAwait
+        }
+        cameraRecorder.lifecycleOwner = service
+        requireController().start { result ->
+          result
+            .onSuccess { promise.resolve(it.toMap()) }
+            .onFailure { promise.reject("ERR_START_FAILED", it.message, it) }
+        }
+      }
     }
 
     /** STOP. */
-    AsyncFunction("stop") {
-      val segmentController = requireController()
-      segmentController.stop()
-      RecordingService.stop(context)
-      segmentController.status().toMap()
+    AsyncFunction("stop") { promise: Promise ->
+      val segmentController = controller
+      if (segmentController == null) {
+        promise.resolve(idleStatus().toMap())
+        return@AsyncFunction
+      }
+      segmentController.stop { status ->
+        cameraRecorder.lifecycleOwner = null
+        RecordingService.stop(context)
+        promise.resolve(status.toMap())
+      }
     }
 
     /** SAVE — resolves once the merged file is on disk; recording never pauses. */
@@ -95,7 +125,7 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
     }
 
     Function("getStatus") {
-      requireController().status().toMap()
+      (controller?.status() ?: idleStatus()).toMap()
     }
 
     AsyncFunction("listSavedClips") {
@@ -138,7 +168,13 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
 
   override fun onStateChanged(status: BufferStatus) = sendEvent("onStateChange", status.toMap())
 
-  override fun onClipFinished(status: BufferStatus) = sendEvent("onClipFinished", status.toMap())
+  override fun onClipFinished(status: BufferStatus) {
+    // The notification is the only view of the buffer once the app is
+    // backgrounded, and a clip boundary is the cheapest honest moment to
+    // refresh it (§6).
+    RecordingService.updateNotification(status.bufferedSec)
+    sendEvent("onClipFinished", status.toMap())
+  }
 
   override fun onSaved(clip: SavedClip) = sendEvent("onSaved", clip.toMap())
 
@@ -147,19 +183,32 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
 
   // --- wiring -------------------------------------------------------------
 
+  /**
+   * The controller needs no Activity: the camera's LifecycleOwner is
+   * [RecordingService], handed to the recorder at Play. That also means
+   * `configure` works before the first Play, which it could not when this
+   * required a live Activity.
+   */
   private fun requireController(): SegmentController {
     controller?.let { return it }
-    // TODO(phase-2): once RecordingService owns the capture session, use the
-    // service as the LifecycleOwner so recording survives the Activity going
-    // away — binding to the Activity only holds while the app is foregrounded.
-    val owner = appContext.currentActivity as? LifecycleOwner
-      ?: throw Exceptions.MissingActivity()
     return SegmentController(
       storage = storage,
-      recorder = CameraXSegmentRecorder(context, owner),
+      recorder = cameraRecorder,
       merger = ClipMerger(storage),
       listener = this,
     ).also { controller = it }
+  }
+
+  private fun idleStatus(): BufferStatus {
+    val config = controller?.currentConfig() ?: RecorderConfig()
+    return BufferStatus(
+      state = RecorderState.IDLE,
+      clipCount = 0,
+      maxClips = config.maxClips,
+      bufferedSec = 0.0,
+      bufferedBytes = 0L,
+      elapsedSec = 0.0,
+    )
   }
 
   /**
