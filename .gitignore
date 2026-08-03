@@ -16,9 +16,14 @@ expo-env.d.ts
 # Gradle / Android build output (incl. local expo modules)
 build/
 .gradle/
+.cxx/
 local.properties
 *.iml
+.idea/
 captures/
+*.apk
+*.aab
+*.keystore
 
 # Xcode / CocoaPods
 Pods/
