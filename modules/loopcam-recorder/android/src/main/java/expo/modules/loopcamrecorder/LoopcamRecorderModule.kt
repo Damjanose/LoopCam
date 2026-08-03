@@ -33,6 +33,7 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
     Events("onStateChange", "onClipFinished", "onSaved", "onStorageWarning", "onError")
 
     OnCreate {
+      live = this@LoopcamRecorderModule
       // §7.2 — a temp session that survived a process death is orphaned by
       // definition; sweep before anything else touches the buffer.
       storage.cleanupOrphanedSessions()
@@ -41,6 +42,7 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
     OnDestroy {
       // A reload leaves the service and the camera bound to a controller that
       // no longer has anywhere to report; tear the whole thing down.
+      if (live === this@LoopcamRecorderModule) live = null
       controller?.release()
       controller = null
       cameraRecorder.lifecycleOwner = null
@@ -183,6 +185,39 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
   override fun onError(code: RecorderErrorCode, message: String) =
     sendEvent("onError", mapOf("code" to code.jsValue, "message" to message))
 
+  // --- notification controls ----------------------------------------------
+
+  /**
+   * The lock-screen Stop, running the same teardown as the JS `stop` — the
+   * camera's LifecycleOwner has to be dropped here too, or the next Play binds
+   * CameraX to a service that is on its way to being destroyed.
+   *
+   * [onDone] fires only once the controller has actually finished, so the
+   * caller knows when it is safe to let the service die.
+   */
+  internal fun stopFromNotification(onDone: () -> Unit) {
+    val segmentController = controller
+    if (segmentController == null) {
+      cameraRecorder.lifecycleOwner = null
+      onDone()
+      return
+    }
+    segmentController.stop {
+      cameraRecorder.lifecycleOwner = null
+      onDone()
+    }
+  }
+
+  /** The lock-screen Save. JS still hears about it through `onSaved` (§3.1). */
+  internal fun saveFromNotification(onResult: (Result<SavedClip>) -> Unit) {
+    val segmentController = controller
+    if (segmentController == null) {
+      onResult(Result.failure(IllegalStateException("Not recording")))
+      return
+    }
+    segmentController.save(SaveTrigger.MANUAL, onResult)
+  }
+
   // --- wiring -------------------------------------------------------------
 
   /**
@@ -265,5 +300,13 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
     @JvmStatic
     var controller: SegmentController? = null
       internal set
+
+    /**
+     * The attached module, so [RecordingService] can route a notification tap
+     * through the same code the JS buttons use rather than reaching past it
+     * into the controller. Null between a reload and the next OnCreate.
+     */
+    @JvmStatic
+    internal var live: LoopcamRecorderModule? = null
   }
 }
