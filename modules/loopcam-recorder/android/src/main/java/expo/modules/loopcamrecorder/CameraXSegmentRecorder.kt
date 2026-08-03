@@ -6,7 +6,6 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraState
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
@@ -64,17 +63,7 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     cameraProvider = provider
 
     val recorder = Recorder.Builder()
-      .setQualitySelector(
-        QualitySelector.from(
-          when (config.videoQuality) {
-            VideoQuality.HD_720 -> Quality.HD
-            VideoQuality.HD_1080 -> Quality.FHD
-            VideoQuality.UHD_4K -> Quality.UHD
-          },
-          // Never fail to record because a device lacks the requested tier.
-          FallbackStrategy.lowerQualityOrHigherThan(Quality.HD),
-        )
-      )
+      .setQualitySelector(QualitySelector.fromOrderedList(qualityLadder(config.videoQuality)))
       .build()
     val capture = VideoCapture.withOutput(recorder)
     val preview = Preview.Builder().build()
@@ -132,6 +121,31 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
 
     videoCapture = capture
     previewUseCase = preview
+  }
+
+  /**
+   * Every quality the session will accept, best first.
+   *
+   * A [FallbackStrategy] cannot do this job: its rules search *strictly* below
+   * and then strictly above their anchor, so a camera whose only supported tier
+   * is the anchor itself resolves to nothing and `bindToLifecycle` dies with
+   * "Unable to find supported quality by QualitySelector". That is not a corner
+   * case — every emulator and every 720p-only device lands there, and the whole
+   * app is unusable because Play can never bind.
+   *
+   * An exhaustive ordered list cannot miss: whatever the camera supports is
+   * somewhere in it. The order steps *down* from the requested tier before
+   * stepping up, so a device that cannot honour the request records a cheaper
+   * buffer rather than silently filling the disk with a larger one.
+   */
+  private fun qualityLadder(requested: VideoQuality): List<Quality> {
+    val preferred = when (requested) {
+      VideoQuality.HD_720 -> Quality.HD
+      VideoQuality.HD_1080 -> Quality.FHD
+      VideoQuality.UHD_4K -> Quality.UHD
+    }
+    val index = DESCENDING_QUALITIES.indexOf(preferred)
+    return DESCENDING_QUALITIES.drop(index) + DESCENDING_QUALITIES.take(index).reversed()
   }
 
   /** Main thread only — [LiveData.removeObserver] demands it. */
@@ -228,5 +242,8 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
 
   private companion object {
     const val BIND_TIMEOUT_SEC = 10L
+
+    /** Largest first — [qualityLadder] slices this both ways. */
+    val DESCENDING_QUALITIES = listOf(Quality.UHD, Quality.FHD, Quality.HD, Quality.SD)
   }
 }
