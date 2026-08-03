@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  AppState,
   FlatList,
   Pressable,
   SafeAreaView,
@@ -10,6 +12,8 @@ import {
 } from 'react-native';
 
 import { LoopcamRecorder, type SavedClip } from '../../modules/loopcam-recorder';
+import SwipeableRow from '../components/SwipeableRow';
+import UndoToast from '../components/UndoToast';
 import ClipPlayer from './ClipPlayer';
 import { STATUS_BAR_INSET } from './RecorderScreen';
 
@@ -19,6 +23,9 @@ const formatDuration = (seconds: number) => {
 };
 
 const formatSize = (bytes: number) => `${(bytes / 1_000_000).toFixed(0)} MB`;
+
+/** How long a delete stays undoable before the file is actually removed. */
+const UNDO_WINDOW_MS = 5000;
 
 const formatWhen = (ms: number) =>
   new Date(ms).toLocaleString(undefined, {
@@ -40,6 +47,13 @@ export default function SavedClipsScreen({ onBack }: { onBack: () => void }) {
   const [clips, setClips] = useState<SavedClip[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [playing, setPlaying] = useState<SavedClip | null>(null);
+  // At most one row stays parked open, as in Mail/Gmail.
+  const [openId, setOpenId] = useState<string | null>(null);
+  /** The delete awaiting confirmation, with the row's slot for a restore. */
+  const [pending, setPending] = useState<{ clip: SavedClip; index: number } | null>(null);
+  // Mirrored in a ref so cleanup paths can commit it without re-subscribing.
+  const pendingRef = useRef<{ clip: SavedClip; index: number } | null>(null);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -56,6 +70,81 @@ export default function SavedClipsScreen({ onBack }: { onBack: () => void }) {
     void load();
   }, [load]);
 
+  /**
+   * Commit the outstanding delete for real. Called by the 5 s timer, by the
+   * next delete, by leaving this screen, and by backgrounding the app — any of
+   * those means the user has moved on, which counts as confirmation.
+   */
+  const flushPending = useCallback(() => {
+    if (undoTimer.current) {
+      clearTimeout(undoTimer.current);
+      undoTimer.current = null;
+    }
+    const entry = pendingRef.current;
+    pendingRef.current = null;
+    setPending(null);
+    if (!entry) return;
+
+    LoopcamRecorder.deleteSavedClip(entry.clip.id).catch((e) => {
+      Alert.alert('Could not delete', e instanceof Error ? e.message : String(e));
+      // The delete may have half-happened; re-read to show the truth.
+      void load();
+    });
+  }, [load]);
+
+  const remove = useCallback(
+    (clip: SavedClip) => {
+      // A second delete confirms the first — only one undo is ever pending.
+      flushPending();
+
+      // The row leaves the list immediately; the file only goes once the undo
+      // window closes, so the position is remembered for a possible restore.
+      const index = Math.max(0, clips?.findIndex((c) => c.id === clip.id) ?? 0);
+      setClips((current) => current?.filter((c) => c.id !== clip.id) ?? current);
+      setOpenId((current) => (current === clip.id ? null : current));
+
+      const entry = { clip, index };
+      pendingRef.current = entry;
+      setPending(entry);
+      undoTimer.current = setTimeout(flushPending, UNDO_WINDOW_MS);
+    },
+    [clips, flushPending],
+  );
+
+  const undo = useCallback(() => {
+    const entry = pendingRef.current;
+    if (!entry) return;
+    if (undoTimer.current) {
+      clearTimeout(undoTimer.current);
+      undoTimer.current = null;
+    }
+    pendingRef.current = null;
+    setPending(null);
+    setClips((current) => {
+      if (!current) return current;
+      const next = current.slice();
+      next.splice(Math.min(entry.index, next.length), 0, entry.clip);
+      return next;
+    });
+  }, []);
+
+  // Leaving the screen (Back, or opening a clip) confirms the delete.
+  useEffect(() => {
+    if (playing) flushPending();
+  }, [playing, flushPending]);
+
+  // Unmount — including the app being torn down — confirms it too.
+  useEffect(() => flushPending, [flushPending]);
+
+  // Backgrounding is the last moment we can be sure of running: the OS may kill
+  // the app afterwards without another React lifecycle.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') flushPending();
+    });
+    return () => sub.remove();
+  }, [flushPending]);
+
   if (playing) {
     return <ClipPlayer clip={playing} onBack={() => setPlaying(null)} />;
   }
@@ -63,7 +152,13 @@ export default function SavedClipsScreen({ onBack }: { onBack: () => void }) {
   return (
     <SafeAreaView style={styles.root}>
       <View style={styles.header}>
-        <Pressable accessibilityRole="button" onPress={onBack} style={styles.back}>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => {
+            flushPending();
+            onBack();
+          }}
+          style={styles.back}>
           <Text style={styles.backLabel}>‹ Back</Text>
         </Pressable>
         <Text style={styles.title}>Saved</Text>
@@ -82,22 +177,42 @@ export default function SavedClipsScreen({ onBack }: { onBack: () => void }) {
             </Text>
           }
           renderItem={({ item }) => (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Play clip from ${formatWhen(item.createdAtMs)}`}
-              onPress={() => setPlaying(item)}
-              style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}>
-              <View style={styles.thumb}>
-                <Text style={styles.thumbGlyph}>▶</Text>
-              </View>
-              <View style={styles.rowText}>
-                <Text style={styles.rowTitle}>{formatWhen(item.createdAtMs)}</Text>
-                <Text style={styles.rowMeta}>
-                  {formatDuration(item.durationSec)} · {formatSize(item.sizeBytes)}
-                </Text>
-              </View>
-            </Pressable>
+            <SwipeableRow
+              onDelete={() => remove(item)}
+              open={openId === item.id}
+              onOpenChange={(open) => setOpenId(open ? item.id : null)}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Play clip from ${formatWhen(item.createdAtMs)}`}
+                accessibilityHint="Swipe left to delete"
+                // Tapping an open row closes it rather than starting playback,
+                // so the revealed Delete can't be hit by accident.
+                onPress={() => (openId === item.id ? setOpenId(null) : setPlaying(item))}
+                // Undo makes a confirmation dialog unnecessary here.
+                onLongPress={() => remove(item)}
+                style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+                <View style={styles.thumb}>
+                  <Text style={styles.thumbGlyph}>▶</Text>
+                </View>
+                <View style={styles.rowText}>
+                  <Text style={styles.rowTitle}>{formatWhen(item.createdAtMs)}</Text>
+                  <Text style={styles.rowMeta}>
+                    {formatDuration(item.durationSec)} · {formatSize(item.sizeBytes)}
+                  </Text>
+                </View>
+              </Pressable>
+            </SwipeableRow>
           )}
+        />
+      )}
+
+      {pending && (
+        <UndoToast
+          // Remount per delete so the countdown restarts.
+          key={pending.clip.id}
+          message="Recording deleted"
+          durationMs={UNDO_WINDOW_MS}
+          onUndo={undo}
         />
       )}
     </SafeAreaView>
@@ -125,15 +240,8 @@ const styles = StyleSheet.create({
     marginTop: 64,
     lineHeight: 24,
   },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 14,
-    padding: 12,
-  },
-  rowPressed: { opacity: 0.6 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 12 },
+  pressed: { opacity: 0.6 },
   thumb: {
     width: 56,
     height: 56,
