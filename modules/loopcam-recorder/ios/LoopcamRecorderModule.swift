@@ -17,6 +17,9 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
     delegate: self
   )
   private var protectedIds = Set<String>()
+  /// Live Activity button taps. Held so `OnDestroy` can drop them — a reload
+  /// otherwise leaves a dead module answering the Lock Screen.
+  private var liveActivityObservers: [NSObjectProtocol] = []
 
   public func definition() -> ModuleDefinition {
     Name("LoopcamRecorder")
@@ -28,9 +31,15 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
       self.storage.cleanupOrphanedSessions()
       // §6 — needed for the low-battery auto-save-and-stop threshold.
       UIDevice.current.isBatteryMonitoringEnabled = true
+      self.observeLiveActivity()
     }
 
     OnDestroy {
+      self.liveActivityObservers.forEach(NotificationCenter.default.removeObserver)
+      self.liveActivityObservers = []
+      // The session dies with the module, so the card has to go with it rather
+      // than sit on the Lock Screen offering buttons that no longer land.
+      LiveActivityBridge.postEnd()
       self.controller.release()
     }
 
@@ -59,6 +68,8 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
       // session (configured in AVSegmentRecorder) is what buys background time.
       DispatchQueue.main.async { UIApplication.shared.isIdleTimerDisabled = true }
       self.controller.start()
+      // The Lock Screen card is the only control surface once the phone locks.
+      LiveActivityBridge.post(LiveActivityBridge.start, self.controller.status)
       return self.controller.status.asDictionary()
     }
 
@@ -66,6 +77,7 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
     AsyncFunction("stop") { () -> [String: Any] in
       self.controller.stop()
       DispatchQueue.main.async { UIApplication.shared.isIdleTimerDisabled = false }
+      LiveActivityBridge.postEnd()
       return self.controller.status.asDictionary()
     }
 
@@ -132,18 +144,74 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
 
   func segmentControllerDidChangeState(_ status: BufferStatus) {
     sendEvent("onStateChange", status.asDictionary())
+    if status.state != .idle {
+      LiveActivityBridge.post(LiveActivityBridge.update, status)
+    }
   }
 
+  /// The card is repainted here rather than on a timer: the buffer figure only
+  /// changes when a clip closes (§2.4), and a Live Activity update per second
+  /// would burn the system's update budget for a number that had not moved.
   func segmentControllerDidFinishClip(_ status: BufferStatus) {
     sendEvent("onClipFinished", status.asDictionary())
+    LiveActivityBridge.post(LiveActivityBridge.update, status)
   }
 
   func segmentControllerDidSave(_ clip: SavedClip) {
     sendEvent("onSaved", clip.asDictionary() as [String: Any])
+    LiveActivityBridge.post(LiveActivityBridge.update, controller.status, banner: "Clip saved")
   }
 
   func segmentControllerDidError(_ code: RecorderErrorCode, _ message: String) {
     sendEvent("onError", ["code": code.rawValue, "message": message])
+    LiveActivityBridge.post(LiveActivityBridge.update, controller.status, banner: message)
+  }
+
+  // MARK: - Lock Screen controls
+
+  /// Both handlers mirror the Android notification actions: they run the *same*
+  /// engine calls as the JS buttons, so a Save from the Lock Screen is
+  /// indistinguishable downstream — JS still hears `onSaved` (§3.1).
+  private func observeLiveActivity() {
+    let center = NotificationCenter.default
+    liveActivityObservers = [
+      center.addObserver(forName: LiveActivityBridge.saveRequested, object: nil, queue: nil) { [weak self] _ in
+        self?.saveFromLiveActivity()
+      },
+      center.addObserver(forName: LiveActivityBridge.stopRequested, object: nil, queue: nil) { [weak self] _ in
+        self?.stopFromLiveActivity()
+      },
+    ]
+  }
+
+  /// Save cuts the in-flight clip and waits for the merge (§2.3), which can take
+  /// until the next clip boundary. With the phone locked the card is the only
+  /// feedback there is, so it has to say something immediately — otherwise a
+  /// working Save is indistinguishable from a dead button.
+  private func saveFromLiveActivity() {
+    LiveActivityBridge.post(LiveActivityBridge.update, controller.status, banner: "Saving…")
+    controller.save(trigger: .manual) { [weak self] result in
+      guard let self else { return }
+      switch result {
+      case .success:
+        // `segmentControllerDidSave` already repainted the card with the
+        // "Clip saved" banner, and JS was told. Nothing left to do here.
+        break
+      case .failure(let error):
+        LiveActivityBridge.post(
+          LiveActivityBridge.update,
+          self.controller.status,
+          banner: error.localizedDescription
+        )
+      }
+    }
+  }
+
+  private func stopFromLiveActivity() {
+    LiveActivityBridge.post(LiveActivityBridge.update, controller.status, banner: "Stopping…")
+    controller.stop()
+    DispatchQueue.main.async { UIApplication.shared.isIdleTimerDisabled = false }
+    LiveActivityBridge.postEnd()
   }
 
   // MARK: - saved clips

@@ -40,6 +40,10 @@ modules/loopcam-recorder/
     StorageManager.kt          §7.1 paths, naming, orphan cleanup
     ClipMerger.kt              §4 stream-copy concat on Save
   ios/                         same decomposition in Swift
+    LiveActivityBridge.swift   recorder half of the iOS Lock Screen card
+targets/widget/                iOS Live Activity, linked by @bacons/apple-targets
+  Shared/                      also compiled into the app target (see plugin)
+plugins/withLoopCamLiveActivity.js
 ```
 
 Android and iOS deliberately mirror each other file-for-file, so a change to the
@@ -83,6 +87,15 @@ UI. What is stubbed, each marked `TODO(phase-N)` at the exact call site:
 is a real OS contract; iOS has no equivalent for camera capture. The plan's
 recommendation, which the code follows, is a screen-on "driving mode" on iOS
 (`isIdleTimerDisabled`) and to set that expectation during onboarding.
+
+**Background controls are per-platform.** Android's foreground-service
+notification carries Save and Stop. iOS gets a Lock Screen **Live Activity**
+(`targets/widget`) with the same two buttons — `LiveActivityIntent`, so a tap is
+performed in the app's process and reaches the same engine calls the in-app
+buttons use. It does not make iOS record in the background; it is the control
+surface and status readout for a session you can no longer see. Set
+`ios.appleTeamId` in `app.json` before building to a device, or the extension
+will not sign.
 
 **Save never pauses recording** (§2.3). It snapshots the closed clips, hands
 them to a background merge queue, and starts a fresh window immediately. The

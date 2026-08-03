@@ -61,6 +61,8 @@
       ],
       "expo-video",
       "expo-sharing",
+      "@bacons/apple-targets",
+      "./plugins/withLoopCamLiveActivity",
       [
         "expo-navigation-bar",
         {
