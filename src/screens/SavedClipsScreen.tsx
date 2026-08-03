@@ -15,6 +15,7 @@ import {
 import { LoopcamRecorder, type SavedClip } from '../../modules/loopcam-recorder';
 import SwipeableRow from '../components/SwipeableRow';
 import UndoToast from '../components/UndoToast';
+import { colors, legend, mono, radius } from '../theme';
 import ClipPlayer from './ClipPlayer';
 import { STATUS_BAR_INSET } from './RecorderScreen';
 
@@ -180,18 +181,25 @@ export default function SavedClipsScreen({ onBack }: { onBack: () => void }) {
       <View style={styles.header}>
         <Pressable
           accessibilityRole="button"
+          accessibilityLabel="Back to camera"
           onPress={() => {
             flushPending();
             onBack();
           }}
-          style={styles.back}>
-          <Text style={styles.backLabel}>‹ Back</Text>
+          style={({ pressed }) => [styles.back, pressed && styles.pressed]}>
+          <Text style={styles.backGlyph}>‹</Text>
         </Pressable>
-        <Text style={styles.title}>Saved</Text>
+        <View style={styles.headerText}>
+          <Text style={styles.eyebrow}>Library</Text>
+          <Text style={styles.title}>Saved</Text>
+        </View>
+        {clips !== null && clips.length > 0 && (
+          <Text style={styles.count}>{String(clips.length).padStart(2, '0')}</Text>
+        )}
       </View>
 
       {clips === null ? (
-        <ActivityIndicator style={styles.center} color="#fff" />
+        <ActivityIndicator style={styles.center} color={colors.textDim} />
       ) : (
         <FlatList
           data={clips}
@@ -224,9 +232,12 @@ export default function SavedClipsScreen({ onBack }: { onBack: () => void }) {
                 <View style={styles.rowText}>
                   <Text style={styles.rowTitle}>{formatWhen(item.createdAtMs)}</Text>
                   <Text style={styles.rowMeta}>
-                    {formatDuration(item.durationSec)} · {formatSize(item.sizeBytes)}
+                    {formatDuration(item.durationSec)}
+                    <Text style={styles.rowMetaSep}>{'   ·   '}</Text>
+                    {formatSize(item.sizeBytes)}
                   </Text>
                 </View>
+                <Text style={styles.rowChevron}>›</Text>
               </Pressable>
             </SwipeableRow>
           )}
@@ -247,38 +258,72 @@ export default function SavedClipsScreen({ onBack }: { onBack: () => void }) {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#000' },
+  root: { flex: 1, backgroundColor: colors.void },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    padding: 16,
-    paddingTop: STATUS_BAR_INSET + 16,
+    paddingHorizontal: 16,
+    paddingBottom: 20,
+    paddingTop: STATUS_BAR_INSET + 12,
   },
-  back: { paddingVertical: 8, paddingRight: 8 },
-  backLabel: { color: '#0a84ff', fontSize: 20, fontWeight: '600' },
-  title: { color: '#fff', fontSize: 28, fontWeight: '700' },
+  back: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.hairlineStrong,
+  },
+  backGlyph: { color: colors.text, fontSize: 24, lineHeight: 26, marginTop: -3, marginLeft: -2 },
+  headerText: { gap: 2 },
+  eyebrow: { ...legend, color: colors.textFaint },
+  title: { color: colors.text, fontSize: 30, fontWeight: '700', letterSpacing: -0.8 },
+  /** How many clips are kept, as a cluster readout rather than a sentence. */
+  count: {
+    marginLeft: 'auto',
+    color: colors.textFaint,
+    fontFamily: mono,
+    fontSize: 20,
+    fontVariant: ['tabular-nums'],
+  },
   center: { marginTop: 48 },
-  list: { paddingHorizontal: 16, paddingBottom: 32, gap: 10 },
+  list: { paddingHorizontal: 16, paddingBottom: 32, gap: 8 },
   empty: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 16,
+    color: colors.textDim,
+    fontSize: 15,
     textAlign: 'center',
-    marginTop: 64,
+    marginTop: 96,
     lineHeight: 24,
   },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 12 },
-  pressed: { opacity: 0.6 },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  pressed: { opacity: 0.55 },
   thumb: {
-    width: 56,
-    height: 56,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    width: 52,
+    height: 52,
+    borderRadius: radius.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.hairlineStrong,
+    backgroundColor: 'rgba(238,242,248,0.04)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  thumbGlyph: { color: '#fff', fontSize: 20 },
-  rowText: { flex: 1, gap: 4 },
-  rowTitle: { color: '#fff', fontSize: 17, fontWeight: '600' },
-  rowMeta: { color: 'rgba(255,255,255,0.6)', fontSize: 14, fontVariant: ['tabular-nums'] },
+  thumbGlyph: { color: colors.text, fontSize: 15, marginLeft: 2 },
+  rowText: { flex: 1, gap: 5 },
+  rowTitle: { color: colors.text, fontSize: 16, fontWeight: '600', letterSpacing: -0.2 },
+  rowMeta: {
+    color: colors.textDim,
+    fontFamily: mono,
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+  },
+  rowMetaSep: { color: colors.textFaint },
+  rowChevron: { color: colors.textFaint, fontSize: 20 },
 });

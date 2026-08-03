@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Easing, Pressable, StyleSheet, Text } from 'react-native';
 
+import { colors, legend, radius } from '../theme';
+
 /**
  * Bottom toast offering to undo the last delete.
  *
@@ -79,21 +81,24 @@ const styles = StyleSheet.create({
     paddingLeft: 16,
     paddingRight: 8,
     paddingVertical: 14,
-    borderRadius: 14,
-    backgroundColor: '#2c2c2e',
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.hairlineStrong,
+    backgroundColor: colors.panel,
     overflow: 'hidden',
   },
-  message: { flex: 1, color: '#fff', fontSize: 15 },
-  undo: { paddingHorizontal: 10, paddingVertical: 4 },
-  undoLabel: { color: '#0a84ff', fontSize: 15, fontWeight: '700', letterSpacing: 0.5 },
+  message: { flex: 1, color: colors.text, fontSize: 14, letterSpacing: -0.1 },
+  undo: { paddingHorizontal: 12, paddingVertical: 6 },
+  undoLabel: { ...legend, color: colors.accent },
   pressed: { opacity: 0.6 },
+  /** The window closing, drawn as a draining hairline rather than a countdown. */
   progress: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
     height: 2,
-    backgroundColor: '#0a84ff',
+    backgroundColor: colors.accent,
     transformOrigin: 'left',
   },
 });

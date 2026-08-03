@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
-  DEFAULT_CONFIG,
   LoopcamRecorder,
   maxClipsFor,
   type BufferStatus,
@@ -9,14 +8,24 @@ import {
   type SavedClip,
 } from '../../modules/loopcam-recorder';
 
-const idleStatus = (config: RecorderConfig): BufferStatus => ({
-  state: 'idle',
-  clipCount: 0,
-  maxClips: maxClipsFor(config),
-  bufferedSec: 0,
-  bufferedBytes: 0,
-  elapsedSec: 0,
-});
+/**
+ * A native status plus the wall-clock instant it arrived. The timestamp is what
+ * lets the readouts be extrapolated between events without guessing how stale
+ * the numbers are.
+ */
+type Snapshot = { status: BufferStatus; at: number };
+
+const snapshotOf = (status: BufferStatus): Snapshot => ({ status, at: Date.now() });
+
+/** How often the extrapolated readouts re-render. */
+const TICK_MS = 250;
+
+/**
+ * How far the clock may disagree with native before it re-syncs instead of
+ * riding its own anchor. Wide enough to ignore event-delivery lag, tight enough
+ * that a restarted session is picked up within a clip.
+ */
+const ANCHOR_DRIFT_MS = 2000;
 
 /**
  * Single source of truth for the UI's view of the engine.
@@ -25,8 +34,17 @@ const idleStatus = (config: RecorderConfig): BufferStatus => ({
  * so the buttons can never disagree with what is actually on disk.
  */
 export function useRecorder() {
-  const [config, setConfig] = useState<RecorderConfig>(DEFAULT_CONFIG);
-  const [status, setStatus] = useState<BufferStatus>(() => idleStatus(DEFAULT_CONFIG));
+  // Seeded from native, never from the defaults: the engine outlives this hook
+  // (App.tsx unmounts the recorder screen to browse saved clips) and only emits
+  // at clip boundaries, so starting from a hardcoded idle status would show
+  // Standby, an armed Play button and a 00:00 clock over a live recording until
+  // the next boundary landed.
+  const [config, setConfig] = useState<RecorderConfig>(() => LoopcamRecorder.getConfig());
+  const [snapshot, setSnapshot] = useState<Snapshot>(() =>
+    snapshotOf(LoopcamRecorder.getStatus()),
+  );
+  const status = snapshot.status;
+  const setStatus = useCallback((next: BufferStatus) => setSnapshot(snapshotOf(next)), []);
   const [lastSaved, setLastSaved] = useState<SavedClip | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -39,7 +57,7 @@ export function useRecorder() {
       LoopcamRecorder.addListener('onError', ({ message }) => setError(message)),
     ];
     return () => subscriptions.forEach((subscription) => subscription.remove());
-  }, []);
+  }, [setStatus]);
 
   const run = useCallback(async (action: () => Promise<unknown>) => {
     setBusy(true);
@@ -80,7 +98,12 @@ export function useRecorder() {
     (patch: Partial<RecorderConfig>) => {
       const next = { ...config, ...patch };
       setConfig(next);
-      setStatus((current) => ({ ...current, maxClips: maxClipsFor(next) }));
+      // Capacity only — the buffer's age is unchanged, so the arrival timestamp
+      // must survive or the extrapolated readouts would jump back.
+      setSnapshot((current) => ({
+        ...current,
+        status: { ...current.status, maxClips: maxClipsFor(next) },
+      }));
       void LoopcamRecorder.configure(next);
     },
     [config],
@@ -92,36 +115,56 @@ export function useRecorder() {
    * Native only emits on real events — a clip boundary, a state change — which
    * is every `clipDurationSec` seconds. Rendering `status` alone therefore
    * leaves the clock reading 00:00 for the first ten seconds of a drive, which
-   * makes a running recorder look broken.
+   * makes a running recorder look broken. So the readouts are extrapolated from
+   * the last snapshot, re-rendered on a ticker.
    *
-   * So the seconds are advanced locally between events. Native stays the source
-   * of truth: every event resets this to whatever it reports, and the tick only
-   * fills the silence in between.
+   * Sub-second so the seconds digit flips within a quarter second of the truth;
+   * a 1 s interval drifts and visibly skips a second every so often.
    */
-  const [tick, setTick] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!isRecording) {
-      setTick(0);
-      return;
-    }
-    const started = Date.now();
-    const id = setInterval(() => setTick((Date.now() - started) / 1000), 1000);
+    if (!isRecording) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), TICK_MS);
     return () => clearInterval(id);
-    // Restarting on every event is the point: each one re-bases the tick.
-  }, [isRecording, status]);
+    // Deliberately not keyed on `status`: re-basing the ticker on every event
+    // is what used to make the clock lurch forward and then fall back.
+  }, [isRecording]);
+
+  /**
+   * The clock runs off the instant Play was pressed, reconstructed once from a
+   * snapshot, rather than off each event's `elapsedSec`. Native measures that
+   * from the same wall clock, so every event agrees with the anchor to within
+   * its delivery lag — but re-reading it each time would feed those tens of
+   * milliseconds of jitter straight into a display that rounds to seconds, and
+   * the clock would step backwards across a boundary. Anchoring makes it
+   * monotonic; a disagreement past `ANCHOR_DRIFT_MS` is a real restart rather
+   * than lag, and re-anchors.
+   */
+  const anchorRef = useRef<number | null>(null);
+  const reportedAnchor = snapshot.at - status.elapsedSec * 1000;
+  if (!isRecording) {
+    anchorRef.current = null;
+  } else if (
+    anchorRef.current === null ||
+    Math.abs(anchorRef.current - reportedAnchor) > ANCHOR_DRIFT_MS
+  ) {
+    anchorRef.current = reportedAnchor;
+  }
+  const anchor = anchorRef.current;
 
   const liveStatus = useMemo<BufferStatus>(() => {
-    if (!isRecording) return status;
+    if (!isRecording || anchor === null) return status;
+    // Age of the numbers in hand. Clamped: a snapshot can land a hair after the
+    // last tick, and negative growth would read as the buffer shrinking.
+    const since = Math.max(0, (now - snapshot.at) / 1000);
     return {
       ...status,
-      elapsedSec: status.elapsedSec + tick,
+      elapsedSec: Math.max(status.elapsedSec, (now - anchor) / 1000),
       // Footage Save would keep also includes the clip being written right now.
-      bufferedSec: Math.min(
-        status.bufferedSec + tick,
-        config.bufferDurationSec,
-      ),
+      bufferedSec: Math.min(status.bufferedSec + since, config.bufferDurationSec),
     };
-  }, [config.bufferDurationSec, isRecording, status, tick]);
+  }, [anchor, config.bufferDurationSec, isRecording, now, snapshot.at, status]);
   // Time, not clip count: the meter answers "how much footage would Save keep",
   // and counting clips makes it jump a whole segment at a time.
   const bufferFill = useMemo(

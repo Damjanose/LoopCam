@@ -2,6 +2,7 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 
 import type { SavedClip } from '../../modules/loopcam-recorder';
+import { colors, legend, mono, radius } from '../theme';
 import { STATUS_BAR_INSET } from './RecorderScreen';
 
 /**
@@ -21,12 +22,19 @@ export default function ClipPlayer({ clip, onBack }: { clip: SavedClip; onBack: 
   return (
     <SafeAreaView style={styles.root}>
       <View style={styles.header}>
-        <Pressable accessibilityRole="button" onPress={onBack} style={styles.back}>
-          <Text style={styles.backLabel}>‹ Saved</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to saved clips"
+          onPress={onBack}
+          style={({ pressed }) => [styles.back, pressed && styles.pressed]}>
+          <Text style={styles.backGlyph}>‹</Text>
         </Pressable>
-        <Text style={styles.title} numberOfLines={1}>
-          {clip.id}
-        </Text>
+        <View style={styles.headerText}>
+          <Text style={styles.eyebrow}>Recording</Text>
+          <Text style={styles.title} numberOfLines={1}>
+            {clip.id}
+          </Text>
+        </View>
       </View>
 
       <VideoView style={styles.video} player={player} nativeControls contentFit="contain" />
@@ -35,16 +43,28 @@ export default function ClipPlayer({ clip, onBack }: { clip: SavedClip; onBack: 
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#000' },
+  root: { flex: 1, backgroundColor: colors.void },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    padding: 16,
-    paddingTop: STATUS_BAR_INSET + 16,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    paddingTop: STATUS_BAR_INSET + 12,
   },
-  back: { paddingVertical: 8, paddingRight: 8 },
-  backLabel: { color: '#0a84ff', fontSize: 20, fontWeight: '600' },
-  title: { color: 'rgba(255,255,255,0.6)', fontSize: 15, flex: 1 },
-  video: { flex: 1, backgroundColor: '#000' },
+  back: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.hairlineStrong,
+  },
+  backGlyph: { color: colors.text, fontSize: 24, lineHeight: 26, marginTop: -3, marginLeft: -2 },
+  pressed: { opacity: 0.55 },
+  headerText: { flex: 1, gap: 2 },
+  eyebrow: { ...legend, color: colors.textFaint },
+  title: { color: colors.text, fontFamily: mono, fontSize: 14 },
+  video: { flex: 1, backgroundColor: colors.void },
 });
