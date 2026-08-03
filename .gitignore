@@ -12,6 +12,24 @@ expo-env.d.ts
 # Native
 .kotlin/
 *.orig.*
+
+# Gradle / Android build output (incl. local expo modules)
+build/
+.gradle/
+local.properties
+*.iml
+captures/
+
+# Xcode / CocoaPods
+Pods/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+
+# signing material
 *.jks
 *.p8
 *.p12
