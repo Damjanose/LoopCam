@@ -1,6 +1,8 @@
 import { type ReactNode, useEffect, useMemo, useRef } from 'react';
 import { Animated, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { colors, legend, radius } from '../theme';
+
 /** Width of the action revealed when the row snaps open. */
 const ACTION_WIDTH = 88;
 /** Drag this far and releasing parks the row open instead of springing back. */
@@ -162,8 +164,8 @@ export default function SwipeableRow({
             accessibilityLabel="Share recording"
             onPress={() => onShareRef.current()}
             style={({ pressed }) => [styles.actionButton, pressed && styles.pressed]}>
-            <Text style={styles.actionGlyph}>📤</Text>
-            <Text style={styles.actionLabel}>Share</Text>
+            <Text style={[styles.actionGlyph, styles.onAccent]}>↗</Text>
+            <Text style={[styles.actionLabel, styles.onAccent]}>Share</Text>
           </Pressable>
         </Animated.View>
       </Animated.View>
@@ -177,7 +179,7 @@ export default function SwipeableRow({
             accessibilityLabel="Delete recording"
             onPress={() => onDeleteRef.current()}
             style={({ pressed }) => [styles.actionButton, pressed && styles.pressed]}>
-            <Text style={styles.actionGlyph}>🗑</Text>
+            <Text style={styles.actionGlyph}>✕</Text>
             <Text style={styles.actionLabel}>Delete</Text>
           </Pressable>
         </Animated.View>
@@ -195,10 +197,10 @@ export default function SwipeableRow({
 const fill = { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 } as const;
 
 const styles = StyleSheet.create({
-  root: { borderRadius: 14, overflow: 'hidden', backgroundColor: '#141414' },
+  root: { borderRadius: radius.md, overflow: 'hidden', backgroundColor: colors.panel },
   actionLayer: { ...fill },
-  shareLayer: { backgroundColor: '#0a84ff', alignItems: 'flex-start' },
-  deleteLayer: { backgroundColor: '#ff453a', alignItems: 'flex-end' },
+  shareLayer: { backgroundColor: colors.accent, alignItems: 'flex-start' },
+  deleteLayer: { backgroundColor: colors.danger, alignItems: 'flex-end' },
   actionSlot: { height: '100%', width: ACTION_WIDTH },
   shareSlot: { alignItems: 'flex-start' },
   deleteSlot: { alignItems: 'flex-end' },
@@ -210,9 +212,11 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   pressed: { opacity: 0.6 },
-  actionGlyph: { fontSize: 20, color: '#fff' },
-  actionLabel: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  actionGlyph: { fontSize: 19, lineHeight: 22, color: colors.text },
+  actionLabel: { ...legend, fontSize: 10, color: colors.text },
+  /** Both actions are filled slabs, so their labels invert on the amber one. */
+  onAccent: { color: colors.onAccent },
   // Opaque on purpose: a translucent row would let the actions show through
   // while it slides.
-  content: { backgroundColor: '#141414' },
+  content: { backgroundColor: colors.panel },
 });
