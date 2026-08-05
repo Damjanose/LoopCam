@@ -177,6 +177,9 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
         // Whichever preview view is mounted now — or mounts later — gets this
         // session's frames, without either side owning the other (§3.1).
         CameraPreviewBus.subscribe { surfaceProvider -> preview.setSurfaceProvider(surfaceProvider) }
+        // The lens travels with the surface: the view has to undo PreviewView's
+        // front-camera mirroring, and only this side knows which lens it bound.
+        CameraPreviewBus.publishFacing(mode == CameraMode.FRONT)
 
         val states = camera.cameraInfo.cameraState
         val observer = object : Observer<CameraState> {
@@ -457,6 +460,7 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
           .build()
         bind(provider, owner, mode, group, frontAnalysis)
         CameraPreviewBus.subscribe { surfaceProvider -> preview.setSurfaceProvider(surfaceProvider) }
+        CameraPreviewBus.publishFacing(mode == CameraMode.FRONT)
         standbyPreview = preview
         standbyFrontAnalysis = frontAnalysis
         standbyWatermark = watermark
@@ -473,7 +477,12 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     mainExecutor.execute {
       val preview = standbyPreview ?: return@execute
       standbyPreview = null
-      if (videoCapture == null) CameraPreviewBus.subscribe(null)
+      if (videoCapture == null) {
+        CameraPreviewBus.subscribe(null)
+        // Cleared with the picture, so a flip cannot outlive the front camera
+        // that justified it and be inherited by the next thing bound.
+        CameraPreviewBus.publishFacing(false)
+      }
       cameraProvider?.unbind(preview)
       standbyFrontAnalysis?.let {
         // Detached before the unbind: an analyzer left attached keeps
@@ -498,6 +507,7 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     mainExecutor.execute {
       stopWatchingState()
       CameraPreviewBus.subscribe(null)
+      CameraPreviewBus.publishFacing(false)
       standbyPreview = null
       // Analyzers off before the unbind, so no conversion is in flight while
       // the pipeline is being pulled apart.

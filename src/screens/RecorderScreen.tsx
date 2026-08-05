@@ -62,7 +62,13 @@ export default function RecorderScreen({
   return (
     <View style={styles.root}>
       <StatusBar style="light" />
-      <LoopcamRecorderView style={StyleSheet.absoluteFill} resizeMode="cover" />
+      {/* Fit, not fill. The app records 16:9 and phones are taller than that,
+          so filling the screen crops roughly a tenth off each side of the
+          picture — including the corner the front camera's inset lives in,
+          which came out jammed against the edge and half cut off. Letterboxed,
+          the viewfinder is the frame the file will have, which is the whole
+          point of framing a shot before a crash rather than after. */}
+      <LoopcamRecorderView style={StyleSheet.absoluteFill} resizeMode="contain" />
 
       <SafeAreaView style={styles.overlay}>
         {/* No panel: the dot and the clock carry the state, so a card behind

@@ -44,6 +44,15 @@ class LoopcamRecorderView: ExpoView {
     let layer = AVCaptureVideoPreviewLayer(session: session)
     layer.videoGravity = videoGravity
     layer.frame = bounds
+    // A preview layer fed by the front camera mirrors itself by default — the
+    // selfie convention. The file is not mirrored (SegmentRecorder), so left
+    // alone this is the one surface that disagrees with the footage: the driver
+    // frames the cabin against a picture that is flipped from the evidence.
+    // Harmless on the back camera, which is never mirrored either way.
+    if let connection = layer.connection, connection.isVideoMirroringSupported {
+      connection.automaticallyAdjustsVideoMirroring = false
+      connection.isVideoMirrored = false
+    }
     self.layer.insertSublayer(layer, at: 0)
     previewLayer = layer
     attachFront(session: session)
@@ -91,22 +100,38 @@ class LoopcamRecorderView: ExpoView {
 
   /// Top-right, sized from the same fractions the burn-in uses, so the
   /// viewfinder's inset sits where the recorded one will.
+  ///
+  /// Measured against the *picture*, not the view. The frame is 16:9 and the
+  /// screen is taller, so under either gravity the two rectangles differ:
+  /// `contain` letterboxes the picture inside the view, `cover` runs it off the
+  /// sides. An inset pinned to the view's own corner would drift out of the
+  /// recorded frame in the first case and be clipped in the second — which is
+  /// exactly what it did.
   private func layoutFront() {
-    guard let frontLayer, bounds.width > 0 else { return }
-    let width = bounds.width * WatermarkStyle.Pip.widthFraction
+    guard let frontLayer, let previewLayer, bounds.width > 0 else { return }
+    // Metadata coordinates are the normalised picture, so the unit rect maps to
+    // whatever part of the view the picture actually occupies. Zero until the
+    // connection knows its source dimensions; the view's own bounds are the
+    // closest thing to an answer until the next layout pass corrects it.
+    let picture = previewLayer.layerRectConverted(
+      fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1)
+    )
+    let frame = picture.isNull || picture.isEmpty ? bounds : picture
+
+    let width = frame.width * WatermarkStyle.Pip.widthFraction
     let height = width / WatermarkStyle.Pip.aspect
-    let inset = min(bounds.width, bounds.height) * WatermarkStyle.insetFraction
+    let inset = min(frame.width, frame.height) * WatermarkStyle.insetFraction
 
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     frontLayer.frame = CGRect(
-      x: bounds.maxX - inset - width,
-      y: bounds.minY + inset,
+      x: frame.maxX - inset - width,
+      y: frame.minY + inset,
       width: width,
       height: height
     )
     frontLayer.cornerRadius = height * WatermarkStyle.Pip.cornerFraction
-    frontLayer.borderWidth = min(bounds.width, bounds.height)
+    frontLayer.borderWidth = min(frame.width, frame.height)
       * WatermarkStyle.Pip.borderWidthFraction
     CATransaction.commit()
   }
@@ -116,6 +141,9 @@ class LoopcamRecorderView: ExpoView {
     // the session does, and the layer built later has to honour it.
     videoGravity = mode == "contain" ? .resizeAspect : .resizeAspectFill
     previewLayer?.videoGravity = videoGravity
+    // The gravity is what decides where the picture sits inside the view, and
+    // the inset is positioned against the picture — so it has to be re-placed.
+    setNeedsLayout()
   }
 
   override func layoutSubviews() {

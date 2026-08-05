@@ -30,6 +30,21 @@ class LoopcamRecorderView(context: Context, appContext: AppContext) :
   /** Cached: CameraX wants the identical provider instance across attaches. */
   private val surfaceProvider: Preview.SurfaceProvider get() = previewView.surfaceProvider
 
+  /**
+   * Cancels `PreviewView`'s front-camera mirroring.
+   *
+   * PreviewView flips the front camera horizontally by default — the selfie
+   * convention, and the right default for a camera app. This is not one: the
+   * recording is deliberately unmirrored so that text inside the cabin reads
+   * the right way round in evidence, and a viewfinder that disagrees with the
+   * footage is worse than either convention on its own. A view-level flip
+   * undoes the display transform without touching the stream, so the file is
+   * unaffected.
+   */
+  private val facingSink: (Boolean) -> Unit = { isFront ->
+    previewView.scaleX = if (isFront) -1f else 1f
+  }
+
   init {
     previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
     // COMPATIBLE (TextureView) rather than PERFORMANCE: the preview sits under a
@@ -46,10 +61,12 @@ class LoopcamRecorderView(context: Context, appContext: AppContext) :
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
+    CameraPreviewBus.observeFacing(facingSink)
     CameraPreviewBus.publish(surfaceProvider)
   }
 
   override fun onDetachedFromWindow() {
+    CameraPreviewBus.unobserveFacing(facingSink)
     // Dropping the surface stops the picture, not the recording — the
     // VideoCapture use case stays bound to the service.
     CameraPreviewBus.publish(null)
