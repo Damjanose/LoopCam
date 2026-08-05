@@ -175,9 +175,9 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
     }
   }
 
-  func segmentControllerDidError(_ code: RecorderErrorCode, _ message: String) {
+  func segmentControllerDidError(_ code: RecorderErrorCode, _ message: String, _ status: BufferStatus) {
     sendEvent("onError", ["code": code.rawValue, "message": message])
-    LiveActivityBridge.post(LiveActivityBridge.update, controller.status, banner: message)
+    LiveActivityBridge.post(LiveActivityBridge.update, status, banner: message)
   }
 
   // MARK: - Lock Screen controls

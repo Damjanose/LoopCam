@@ -10,7 +10,7 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.damjano.dashcam",
       "buildNumber": "1",
-      "appleTeamId": "REPLACE_WITH_TEAM_ID",
+      "appleTeamId": "R72R8C56GK",
       "config": {
         "usesNonExemptEncryption": false
       },
@@ -81,7 +81,8 @@
             "minSdkVersion": 26
           },
           "ios": {
-            "deploymentTarget": "16.4"
+            "deploymentTarget": "16.4",
+            "buildReactNativeFromSource": true
           }
         }
       ],
@@ -89,6 +90,7 @@
       "expo-sharing",
       "@bacons/apple-targets",
       "./plugins/withLoopCamLiveActivity",
+      "./plugins/withExpoModulesCoreSwift5",
       [
         "expo-navigation-bar",
         {
