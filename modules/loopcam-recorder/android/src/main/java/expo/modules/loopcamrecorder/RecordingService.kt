@@ -171,7 +171,7 @@ class RecordingService : LifecycleService() {
     val seconds = (bufferedSec % 60).toInt()
     val buffered = String.format("%02d:%02d buffered", minutes, seconds)
     return NotificationCompat.Builder(this, CHANNEL_ID)
-      .setContentTitle("LoopCam is recording")
+      .setContentTitle("DashCam is recording")
       .setContentText(banner?.let { "$it · $buffered" } ?: buffered)
       .setSmallIcon(android.R.drawable.presence_video_online)
       .setOngoing(true)
@@ -229,7 +229,7 @@ class RecordingService : LifecycleService() {
     if (manager.getNotificationChannel(CHANNEL_ID) != null) return
     manager.createNotificationChannel(
       NotificationChannel(CHANNEL_ID, "Recording", NotificationManager.IMPORTANCE_LOW).apply {
-        description = "Shown while LoopCam is holding a rolling buffer"
+        description = "Shown while DashCam is holding a rolling buffer"
         setShowBadge(false)
         lockscreenVisibility = Notification.VISIBILITY_PUBLIC
       }

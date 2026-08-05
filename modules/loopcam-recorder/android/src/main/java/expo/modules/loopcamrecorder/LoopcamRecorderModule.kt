@@ -91,7 +91,7 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
         if (service == null) {
           promise.reject(
             "ERR_SERVICE_START",
-            "The LoopCam recording service did not start",
+            "The DashCam recording service did not start",
             null,
           )
           return@startAndAwait
