@@ -68,6 +68,7 @@
       "expo-sharing",
       "@bacons/apple-targets",
       "./plugins/withLoopCamLiveActivity",
+      "./plugins/withAndroidSigning",
       [
         "expo-navigation-bar",
         {
