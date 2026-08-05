@@ -47,6 +47,7 @@ export function useRecorder() {
   const setStatus = useCallback((next: BufferStatus) => setSnapshot(snapshotOf(next)), []);
   const [lastSaved, setLastSaved] = useState<SavedClip | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -55,6 +56,19 @@ export function useRecorder() {
       LoopcamRecorder.addListener('onClipFinished', setStatus),
       LoopcamRecorder.addListener('onSaved', setLastSaved),
       LoopcamRecorder.addListener('onError', ({ message }) => setError(message)),
+      // The sweep has already deleted by the time this lands (§7.2), so this is
+      // a notice, not a prompt — but it has to be said, or clips disappear with
+      // no explanation.
+      LoopcamRecorder.addListener('onStorageWarning', ({ deletedClipIds, lowSpaceWarning }) => {
+        if (deletedClipIds.length > 0) {
+          const plural = deletedClipIds.length === 1 ? '' : 's';
+          setStorageWarning(
+            `Storage full — removed ${deletedClipIds.length} old clip${plural}. Lock a clip to keep it.`,
+          );
+        } else if (lowSpaceWarning) {
+          setStorageWarning('Running low on storage.');
+        }
+      }),
     ];
     return () => subscriptions.forEach((subscription) => subscription.remove());
   }, [setStatus]);
@@ -183,6 +197,8 @@ export function useRecorder() {
     bufferFill,
     lastSaved,
     error,
+    storageWarning,
+    dismissStorageWarning: useCallback(() => setStorageWarning(null), []),
     busy,
     play,
     stop,

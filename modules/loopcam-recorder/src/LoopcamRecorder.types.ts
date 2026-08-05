@@ -84,6 +84,11 @@ export type LoopcamRecorderEvents = {
   onStateChange: (payload: BufferStatus) => void;
   onClipFinished: (payload: BufferStatus) => void;
   onSaved: (payload: SavedClip) => void;
-  onStorageWarning: (payload: StorageStatus) => void;
+  /**
+   * Fired after a save when the budget sweep removed clips (§7.2) or free space
+   * fell under the warning threshold. `deletedClipIds` is what the gallery has
+   * to drop — the files are already gone by the time this arrives.
+   */
+  onStorageWarning: (payload: StorageStatus & { deletedClipIds: string[] }) => void;
   onError: (payload: { code: RecorderErrorCode; message: string }) => void;
 };
