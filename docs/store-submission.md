@@ -64,8 +64,11 @@ grep -o 'android:name="android.permission[^"]*"' \
 ### Release format
 
 App Bundle (`.aab`) via `eas build --platform android --profile production`.
-Never upload the local `assembleRelease` APK — it is signed with the debug
-keystore.
+
+A local `./gradlew assembleRelease` APK is signed with the real release key —
+[`plugins/withAndroidSigning.js`](../plugins/withAndroidSigning.js) injects the
+`LoopCam.keystore` signing config on every prebuild — so it is fine for
+sideloading and internal testing. Play still wants the `.aab`, so upload that.
 
 ---
 
