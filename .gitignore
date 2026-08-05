@@ -34,11 +34,16 @@ DerivedData/
 *.dSYM.zip
 
 # signing material
+# LoopCam.keystore is deliberately committed (see README "Signing"). Its
+# passwords are NOT and must never be — they are the only thing keeping the
+# committed key from being usable by anyone who clones this public repo.
 *.jks
 *.p8
 *.p12
 *.key
 *.mobileprovision
+credentials.json
+gradle.properties
 
 # Metro
 .metro-health-check*
@@ -61,4 +66,3 @@ yarn-error.*
 # generated native folders
 /ios
 /android
-package-lock.json
