@@ -8,13 +8,27 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+  <!--
+    §Part 4 — the burned-in speed has to keep updating with the screen off, and
+    a foreground service reading location needs its own type from Android 14 on.
+    Deliberately paired with ACCESS_FINE_LOCATION and *not* with
+    ACCESS_BACKGROUND_LOCATION: a foreground service with the location type
+    already covers screen-off recording, and the background permission would buy
+    a Play Store policy review for nothing.
+  -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
   <uses-feature android:name="android.hardware.camera.any" android:required="true" />
 
   <application>
+    <!--
+      The declared types are the superset; RecordingService narrows them at
+      startForeground to what is actually granted, because Android 14+ throws
+      SecurityException on a type whose runtime permission is missing.
+    -->
     <service
       android:name=".RecordingService"
       android:exported="false"
-      android:foregroundServiceType="camera|microphone" />
+      android:foregroundServiceType="camera|microphone|location" />
   </application>
 </manifest>

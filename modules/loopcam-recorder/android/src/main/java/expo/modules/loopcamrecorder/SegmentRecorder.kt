@@ -14,6 +14,20 @@ interface SegmentRecorder {
   fun prepare(config: RecorderConfig)
 
   /**
+   * Apply the part of [config] that changes only what the next frame draws.
+   *
+   * Most settings need a session rebuild — `cameraMode` rebinds the cameras,
+   * `quality` re-creates the encoder — which is why they are documented as
+   * taking effect at the next Play. The speed unit is not one of those: it
+   * changes a string, so a mid-drive switch between km/h and mph applies to the
+   * next frame rather than waiting for the drive to end.
+   *
+   * Called on the controller's executor, so implementations must hand the value
+   * to their compositor rather than touching it directly.
+   */
+  fun applyLiveConfig(config: RecorderConfig)
+
+  /**
    * Start writing a new clip into [output]. [onFinished] fires once the file is
    * fully flushed — only then may the clip enter the ring buffer (§10).
    */

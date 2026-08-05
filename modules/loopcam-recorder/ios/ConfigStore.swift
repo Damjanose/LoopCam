@@ -45,6 +45,11 @@ enum ConfigStore {
     if let value = stored.object(forKey: prefix + "locationTaggingEnabled") as? Bool {
       config.locationTaggingEnabled = value
     }
+    if let value = stored.string(forKey: prefix + "speedUnit"),
+      let unit = SpeedUnit(rawValue: value)
+    {
+      config.speedUnit = unit.rawValue
+    }
     if let value = stored.object(forKey: prefix + "impactDetectionEnabled") as? Bool {
       config.impactDetectionEnabled = value
     }
@@ -62,6 +67,7 @@ enum ConfigStore {
     stored.set(config.cameraMode, forKey: prefix + "cameraMode")
     stored.set(config.audioEnabled, forKey: prefix + "audioEnabled")
     stored.set(config.locationTaggingEnabled, forKey: prefix + "locationTaggingEnabled")
+    stored.set(config.speedUnit, forKey: prefix + "speedUnit")
     stored.set(config.impactDetectionEnabled, forKey: prefix + "impactDetectionEnabled")
     stored.set(config.autoStopBatteryPercent, forKey: prefix + "autoStopBatteryPercent")
   }

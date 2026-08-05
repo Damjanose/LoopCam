@@ -36,4 +36,14 @@ dependencies {
 
   // §6 — deferred cleanup/battery-safe tasks.
   implementation "androidx.work:work-runtime-ktx:2.10.0"
+
+  // §Part 1 — the Doppler speed on every fix. Deliberately the fused client
+  // rather than LocationManager: it is the only one that reliably keeps the
+  // GNSS chip in continuous-tracking mode, which is what makes the Doppler
+  // solution available on every fix instead of intermittently.
+  implementation "com.google.android.gms:play-services-location:21.3.0"
+
+  // The speed validation and formatting rules are pure functions, and they are
+  // the one part of phase 5 that can be pinned down without a device.
+  testImplementation "junit:junit:4.13.2"
 }

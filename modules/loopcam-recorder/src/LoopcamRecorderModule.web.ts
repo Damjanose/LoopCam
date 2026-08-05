@@ -5,6 +5,7 @@ import { DEFAULT_CONFIG, maxClipsFor } from './config';
 import type {
   BufferStatus,
   CameraCapabilities,
+  LocationStatus,
   LoopcamRecorderEvents,
   RecorderConfig,
   SavedClip,
@@ -42,6 +43,11 @@ class LoopcamRecorderModule extends NativeModule<LoopcamRecorderEvents> {
 
   hasPermissions(): boolean {
     return false;
+  }
+
+  // There is no recording session on web, so there is nothing to tag.
+  getLocationStatus(): LocationStatus {
+    return 'disabled';
   }
 
   // Not `unsupported()`: the preview is decoration, and a screen that merely

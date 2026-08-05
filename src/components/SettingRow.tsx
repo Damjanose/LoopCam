@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { colors, radius } from '../theme';
 
@@ -49,6 +49,54 @@ export function SettingRow({
           meaning here as it is everywhere else in the app. */}
       <View style={[styles.mark, selected && styles.markSelected]} />
     </Pressable>
+  );
+}
+
+/**
+ * One on/off setting, laid out on the same row geometry as {@link SettingRow}.
+ *
+ * A switch rather than a two-option radio because this is genuinely a toggle,
+ * not a choice between alternatives — and because it sits directly above a real
+ * radio group (the unit), where two radios in a row would read as one group of
+ * four.
+ */
+export function SettingSwitch({
+  label,
+  note,
+  value,
+  disabled = false,
+  first = false,
+  onValueChange,
+}: {
+  label: string;
+  /** Why this row is unavailable, or what turning it on actually does. */
+  note?: string;
+  value: boolean;
+  disabled?: boolean;
+  /** Suppresses the divider, which belongs *between* rows and not above them. */
+  first?: boolean;
+  onValueChange: (value: boolean) => void;
+}) {
+  return (
+    <View
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value, disabled }}
+      accessibilityLabel={note ? `${label}. ${note}` : label}
+      style={[styles.row, !first && styles.divided]}>
+      <View style={styles.text}>
+        <Text style={[styles.label, disabled && styles.labelDisabled]}>{label}</Text>
+        {note ? <Text style={styles.note}>{note}</Text> : null}
+      </View>
+      {/* Amber when on, matching the radio's dot: the accent means "this is
+          active" everywhere else in the app too. */}
+      <Switch
+        value={value}
+        disabled={disabled}
+        onValueChange={onValueChange}
+        trackColor={{ false: colors.hairlineStrong, true: colors.accent }}
+        thumbColor={colors.text}
+      />
+    </View>
   );
 }
 

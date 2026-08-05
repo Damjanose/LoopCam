@@ -8,6 +8,18 @@ protocol SegmentRecorder: AnyObject {
   /// Configure and start the capture session. Called once when Play is pressed.
   func prepare(config: RecorderConfig) throws
 
+  /// Apply the part of `config` that changes only what the next frame draws.
+  ///
+  /// Most settings need a session rebuild — `cameraMode` reconfigures the
+  /// inputs, `quality` re-picks the format — which is why they are documented
+  /// as taking effect at the next Play. The speed unit is not one of those: it
+  /// changes a string, so a mid-drive switch between km/h and mph applies to
+  /// the next frame rather than waiting for the drive to end.
+  ///
+  /// Called from the controller's queue, so implementations must hop onto their
+  /// own queue rather than touching compositor state directly.
+  func applyLiveConfig(_ config: RecorderConfig)
+
   /// Start writing a new clip. `onFinished` fires only once the file is fully
   /// flushed — only then may the clip enter the ring buffer (§10).
   func startClip(
@@ -50,6 +62,11 @@ final class AVSegmentRecorder: NSObject, SegmentRecorder {
   private var quality: VideoQuality = .hd1080
   private var audioEnabled = true
   private var cameraMode: CameraMode = .back
+
+  /// The stamp's speed settings. Both are read on `sessionQueue` at composite
+  /// time and written there by `applyLiveConfig`, so they need no atomics.
+  private var showSpeed = true
+  private var speedUnit: SpeedUnit = .kmh
 
   /// Pushes formats taller than requested to the back of the ranking without
   /// excluding them: overshooting is a last resort, not a disqualification.
@@ -98,6 +115,38 @@ final class AVSegmentRecorder: NSObject, SegmentRecorder {
     CameraPreviewBus.shared.publish(session)
   }
 
+  /// The speed unit, onto the live composite. Assigning two fields on the
+  /// capture queue is the whole operation — no reconfiguration, no dropped
+  /// clip, and the next frame drawn already says mph.
+  func applyLiveConfig(_ config: RecorderConfig) {
+    sessionQueue.async { [weak self] in
+      self?.showSpeed = config.locationTaggingEnabled
+      self?.speedUnit = config.speed
+    }
+  }
+
+  /// The formatted speed field for the frame being composited, or "" when the
+  /// stamp carries no speed.
+  ///
+  /// Empty rather than a blank slot when location tagging is off: a reserved
+  /// but empty field reads as a receiver that never got a fix, which is a
+  /// different claim from "the driver did not ask for this".
+  ///
+  /// Runs on `sessionQueue`, inside the per-frame composite. `currentSpeed` is
+  /// a lock and a struct copy, which is the only reason that is acceptable
+  /// here.
+  private func currentSpeedField() -> String {
+    guard showSpeed else { return "" }
+    let sample = LocationTracker.shared.currentSpeed()
+    return Self.speedGap
+      + SpeedStyle.format(mps: sample?.speedMps, unit: speedUnit, derived: sample?.derived ?? false)
+  }
+
+  /// Separates the clock from the speed on the same plate. Wide enough that the
+  /// two read as two facts rather than one long number. Mirrors
+  /// `WatermarkOverlay.SPEED_GAP`.
+  private static let speedGap = "   "
+
   func startClip(
     output: URL,
     onFinished: @escaping (Clip) -> Void,
@@ -114,6 +163,9 @@ final class AVSegmentRecorder: NSObject, SegmentRecorder {
           // front frames, and reading through to the recorder at composite time
           // is what keeps it looking at the newest one.
           frontFrame: { [weak self] in self?.currentFrontFrame() },
+          // Likewise a closure: the unit can change mid-clip and the reading
+          // changes every second, so the field is built at composite time.
+          speedField: { [weak self] in self?.currentSpeedField() ?? "" },
           onFinished: onFinished,
           onError: onError
         )
@@ -156,6 +208,8 @@ final class AVSegmentRecorder: NSObject, SegmentRecorder {
     quality = config.videoQuality
     audioEnabled = config.audioEnabled
     cameraMode = config.camera
+    showSpeed = config.locationTaggingEnabled
+    speedUnit = config.speed
     latestFront = nil
 
     guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
@@ -509,6 +563,10 @@ private final class ClipWriter {
   private let audioInput: AVAssetWriterInput?
   /// The front camera's newest frame in `both` mode; nil-returning otherwise.
   private let frontFrame: () -> CIImage?
+  /// The already-formatted speed field for the frame being drawn, or "" when
+  /// the stamp carries no speed. A closure rather than a value because the unit
+  /// can change mid-clip and the reading changes every second.
+  private let speedField: () -> String
   private let onFinished: (Clip) -> Void
   private let onError: (Error) -> Void
 
@@ -521,11 +579,13 @@ private final class ClipWriter {
     videoSettings: [String: Any],
     audioSettings: [String: Any]?,
     frontFrame: @escaping () -> CIImage?,
+    speedField: @escaping () -> String,
     onFinished: @escaping (Clip) -> Void,
     onError: @escaping (Error) -> Void
   ) throws {
     self.output = output
     self.frontFrame = frontFrame
+    self.speedField = speedField
     self.onFinished = onFinished
     self.onError = onError
 
@@ -624,7 +684,7 @@ private final class ClipWriter {
       // Wall clock read here rather than derived from the PTS: the two agree to
       // within the pipeline's own latency, and the frame's own clock is on a
       // timebase with no defined relationship to the calendar.
-      let overlay = renderer.overlay(for: Date(), pixelSize: size)
+      let overlay = renderer.overlay(for: Date(), speed: speedField(), pixelSize: size)
     else {
       videoInput.append(sampleBuffer)
       return

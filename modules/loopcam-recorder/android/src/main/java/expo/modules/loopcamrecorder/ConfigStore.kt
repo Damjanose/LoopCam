@@ -33,6 +33,7 @@ internal class ConfigStore(context: Context) {
       cameraMode = CameraMode.from(prefs.getString(CAMERA_MODE, defaults.cameraMode)!!).jsValue
       audioEnabled = prefs.getBoolean(AUDIO, defaults.audioEnabled)
       locationTaggingEnabled = prefs.getBoolean(LOCATION, defaults.locationTaggingEnabled)
+      speedUnit = SpeedUnit.from(prefs.getString(SPEED_UNIT, defaults.speedUnit)!!).jsValue
       impactDetectionEnabled = prefs.getBoolean(IMPACT, defaults.impactDetectionEnabled)
       autoStopBatteryPercent = prefs.getInt(BATTERY, defaults.autoStopBatteryPercent)
     }
@@ -46,6 +47,7 @@ internal class ConfigStore(context: Context) {
       .putString(CAMERA_MODE, config.cameraMode)
       .putBoolean(AUDIO, config.audioEnabled)
       .putBoolean(LOCATION, config.locationTaggingEnabled)
+      .putString(SPEED_UNIT, config.speedUnit)
       .putBoolean(IMPACT, config.impactDetectionEnabled)
       .putInt(BATTERY, config.autoStopBatteryPercent)
       .apply()
@@ -58,6 +60,7 @@ internal class ConfigStore(context: Context) {
     const val CAMERA_MODE = "cameraMode"
     const val AUDIO = "audioEnabled"
     const val LOCATION = "locationTaggingEnabled"
+    const val SPEED_UNIT = "speedUnit"
     const val IMPACT = "impactDetectionEnabled"
     const val BATTERY = "autoStopBatteryPercent"
   }

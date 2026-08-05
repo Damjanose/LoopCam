@@ -22,8 +22,10 @@
       "infoPlist": {
         "NSCameraUsageDescription": "DashCam records a rolling buffer of the road ahead so you can save the last few minutes when something happens.",
         "NSMicrophoneUsageDescription": "DashCam records audio alongside video so saved incidents include sound.",
+        "NSLocationWhenInUseUsageDescription": "DashCam stamps your speed and position onto recorded footage so a saved clip shows where and how fast you were driving.",
         "UIBackgroundModes": [
-          "audio"
+          "audio",
+          "location"
         ],
         "UIRequiresFullScreen": true
       },
@@ -42,7 +44,16 @@
             ]
           }
         ],
-        "NSPrivacyCollectedDataTypes": [],
+        "NSPrivacyCollectedDataTypes": [
+        {
+          "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypePreciseLocation",
+          "NSPrivacyCollectedDataTypeLinked": false,
+          "NSPrivacyCollectedDataTypeTracking": false,
+          "NSPrivacyCollectedDataTypePurposes": [
+            "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+          ]
+        }
+      ],
         "NSPrivacyTracking": false
       }
     },
@@ -62,7 +73,10 @@
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_CAMERA",
-        "android.permission.FOREGROUND_SERVICE_MICROPHONE"
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
       ],
       "blockedPermissions": [
         "android.permission.SYSTEM_ALERT_WINDOW",

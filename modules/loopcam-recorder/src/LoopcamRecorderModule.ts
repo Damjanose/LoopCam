@@ -3,6 +3,7 @@ import { NativeModule, requireNativeModule } from 'expo';
 import type {
   BufferStatus,
   CameraCapabilities,
+  LocationStatus,
   LoopcamRecorderEvents,
   RecorderConfig,
   SavedClip,
@@ -39,6 +40,16 @@ declare class LoopcamRecorderModule extends NativeModule<LoopcamRecorderEvents> 
    * side-effect free — asking must never raise a system dialog.
    */
   hasPermissions(): boolean;
+
+  /**
+   * Why the burned-in speed is reading `--`, for Settings to explain.
+   *
+   * A blank speed field has several quite different causes — no lock yet, a
+   * tunnel, a refused permission, an approximate-only grant — and on a screen
+   * the driver only looks at while parked, guessing which is not something to
+   * leave to them.
+   */
+  getLocationStatus(): LocationStatus;
 
   /**
    * Light the viewfinder without recording: no service, no clips, nothing on

@@ -56,7 +56,29 @@ internal class WatermarkOverlay(
    * the front-camera inset — only the stamp is conditional.
    */
   private val showStamp: Boolean = true,
+  showSpeed: Boolean = false,
+  speedUnit: SpeedUnit = SpeedUnit.KMH,
 ) : AutoCloseable {
+
+  /**
+   * Whether the stamp carries a speed field beside the clock.
+   *
+   * False when location tagging is switched off, and then the plate is the
+   * clock alone rather than a clock with a permanently blank slot — an empty
+   * field would read as a receiver that never got a fix, which is a different
+   * claim from "the driver did not ask for this".
+   */
+  @Volatile
+  var showSpeed: Boolean = showSpeed
+
+  /**
+   * Volatile, like [showSpeed], because both are written from the controller's
+   * executor when the setting changes and read on [thread] on the next frame.
+   * Unlike the camera mode neither needs a session rebuild — one changes a
+   * string and the other whether it is drawn at all.
+   */
+  @Volatile
+  var speedUnit: SpeedUnit = speedUnit
 
   private val thread = HandlerThread("loopcam-watermark").apply { start() }
 
@@ -91,8 +113,14 @@ internal class WatermarkOverlay(
    */
   private val uptimeToWallMs = System.currentTimeMillis() - SystemClock.uptimeMillis()
 
-  /** The text is redrawn per frame but only re-*formatted* when the second turns. */
+  /**
+   * The text is redrawn per frame but only re-*formatted* when it would change.
+   *
+   * The clock turns once a second and fixes arrive at 1 Hz, so keying on both
+   * keeps this to roughly one format per second rather than thirty.
+   */
   private var cachedSecond = Long.MIN_VALUE
+  private var cachedSpeed = ""
   private var cachedText = ""
   private var debugFrames = 0
 
@@ -255,12 +283,32 @@ internal class WatermarkOverlay(
     val now = System.currentTimeMillis()
     val wallMs = if (kotlin.math.abs(now - fromFrame) > CLOCK_SANITY_MS) now else fromFrame
 
+    // Read against the wall clock the stamp is about to claim, so the frame's
+    // own time decides whether the fix is stale — the same argument that makes
+    // the clock come from the frame rather than from `now`.
+    val speed = speedFor(wallMs)
     val second = wallMs / 1000L
-    if (second != cachedSecond) {
+    if (second != cachedSecond || speed != cachedSpeed) {
       cachedSecond = second
-      cachedText = formatter.format(Date(wallMs))
+      cachedSpeed = speed
+      cachedText = formatter.format(Date(wallMs)) + speed
     }
     return cachedText
+  }
+
+  /**
+   * The speed field, or an empty string when the stamp does not carry one.
+   *
+   * [SpeedStyle.format] is fixed-width, so this can never change the plate's
+   * size between frames — a plate that grew by a glyph between 99 and 100 km/h,
+   * or when a fix dropped, would visibly twitch.
+   */
+  private fun speedFor(wallMs: Long): String {
+    if (!showSpeed) return ""
+    // A read of one volatile reference and a comparison; the compositor never
+    // touches the location client itself.
+    val sample = LocationTracker.currentSpeed(wallMs)
+    return SPEED_GAP + SpeedStyle.format(sample?.speedMps, speedUnit, sample?.derived == true)
   }
 
   override fun close() {
@@ -281,5 +329,11 @@ internal class WatermarkOverlay(
 
     /** How far a frame's clock may sit from now before it is not believed. */
     private const val CLOCK_SANITY_MS = 5_000L
+
+    /**
+     * Separates the clock from the speed on the same plate. Wide enough that
+     * the two read as two facts rather than one long number.
+     */
+    private const val SPEED_GAP = "   "
   }
 }

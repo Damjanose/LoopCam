@@ -51,6 +51,25 @@ enum class CameraMode(val jsValue: String) {
   }
 }
 
+/**
+ * Unit for the burned-in speed. Mirrors `SpeedUnit` on the JS side.
+ *
+ * A display preference only — the sidecar is always SI regardless (§Part 3).
+ * Baking a preference into stored evidence means a file that can be misread
+ * later; baking it into the picture is unavoidable and is why the unit is
+ * always drawn next to the number.
+ */
+enum class SpeedUnit(val jsValue: String, val label: String, val perMps: Double) {
+  KMH("kmh", "km/h", 3.6),
+  MPH("mph", "mph", 2.236_936_292_054_402);
+
+  companion object {
+    /** Anything unrecognised — a value written by a newer build — falls back. */
+    fun from(value: String): SpeedUnit =
+      entries.firstOrNull { it.jsValue == value } ?: KMH
+  }
+}
+
 /** §2.1 — the two independent settings, plus the v1 feature toggles. */
 class RecorderConfig : Record {
   @Field var clipDurationSec: Double = 10.0
@@ -59,6 +78,7 @@ class RecorderConfig : Record {
   @Field var cameraMode: String = "back"
   @Field var audioEnabled: Boolean = true
   @Field var locationTaggingEnabled: Boolean = true
+  @Field var speedUnit: String = "kmh"
   @Field var impactDetectionEnabled: Boolean = true
   @Field var autoStopBatteryPercent: Int = 15
 
@@ -70,6 +90,8 @@ class RecorderConfig : Record {
 
   val camera: CameraMode get() = CameraMode.from(cameraMode)
 
+  val speed: SpeedUnit get() = SpeedUnit.from(speedUnit)
+
   fun toMap(): Map<String, Any> = mapOf(
     "clipDurationSec" to clipDurationSec,
     "bufferDurationSec" to bufferDurationSec,
@@ -77,6 +99,7 @@ class RecorderConfig : Record {
     "cameraMode" to cameraMode,
     "audioEnabled" to audioEnabled,
     "locationTaggingEnabled" to locationTaggingEnabled,
+    "speedUnit" to speedUnit,
     "impactDetectionEnabled" to impactDetectionEnabled,
     "autoStopBatteryPercent" to autoStopBatteryPercent,
   )

@@ -35,10 +35,17 @@ final class WatermarkRenderer {
   /// The overlay for `date`, already positioned in the pixel space of a buffer
   /// of `pixelSize`. Returns nil only if the plate could not be rasterised.
   ///
+  /// `speed` is the already-formatted speed field, or an empty string when the
+  /// stamp carries no speed. It arrives formatted rather than as a number
+  /// because `SpeedStyle` is the one place either platform is allowed to decide
+  /// how a speed is written.
+  ///
   /// Called on the capture queue and nowhere else, which is why the cache below
-  /// needs no lock.
-  func overlay(for date: Date, pixelSize: CGSize) -> CIImage? {
-    let text = formatter.string(from: date)
+  /// needs no lock. The clock turns once a second and fixes arrive at 1 Hz, so
+  /// keying the cache on both keeps this to roughly one rasterisation per
+  /// second rather than thirty.
+  func overlay(for date: Date, speed: String, pixelSize: CGSize) -> CIImage? {
+    let text = formatter.string(from: date) + speed
     let key = "\(text)|\(Int(pixelSize.width))x\(Int(pixelSize.height))"
     if key == cachedKey, let cachedImage { return cachedImage }
 
@@ -58,7 +65,12 @@ final class WatermarkRenderer {
 
     let textHeight =
       min(displaySize.width, displaySize.height) * WatermarkStyle.textHeightFraction
-    let font = UIFont.monospacedDigitSystemFont(ofSize: textHeight, weight: .medium)
+    // Fully monospaced, not just monospaced *digits*. The speed field reserves
+    // a fixed number of characters, but with proportional non-digits `" -- "`
+    // and `" 72 "` still measure differently — so the plate would resize every
+    // time a fix dropped. This also matches Android, which has always used
+    // Typeface.MONOSPACE for the whole stamp.
+    let font = UIFont.monospacedSystemFont(ofSize: textHeight, weight: .medium)
     let attributes: [NSAttributedString.Key: Any] = [
       .font: font,
       .foregroundColor: UIColor.white,

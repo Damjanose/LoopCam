@@ -54,6 +54,19 @@ class SegmentController(
     // Resizing live keeps a mid-drive settings change from restarting capture;
     // shrinking drops the oldest clips immediately (§2.1).
     buffer.resize(newConfig.maxClips).forEach { it.file.delete() }
+    // The speed unit reaches the compositor here rather than at the next
+    // prepare(): it changes what the next frame draws and nothing else, so
+    // making the user stop recording to switch to mph would be theatre.
+    recorder.applyLiveConfig(newConfig)
+    // `start` is idempotent and returns early when tagging is off, so this
+    // covers a toggle in either direction mid-drive: switching it on begins
+    // tracking now rather than at the next Play, and switching it off stops the
+    // client inside `configure`.
+    if (state == RecorderState.RECORDING) {
+      LocationTracker.start(newConfig)
+    } else {
+      LocationTracker.configure(newConfig)
+    }
     emitState()
   }
 
@@ -86,6 +99,11 @@ class SegmentController(
     consecutiveClipFailures = 0
     buffer = RingBuffer(config.maxClips)
 
+    // Before prepare(), not after: the receiver takes 5–30 s to reach a first
+    // fix from cold, and every second of that head start is a second of footage
+    // that carries a real speed instead of `--`.
+    LocationTracker.start(config)
+
     // State only advances once the camera is actually bound — reporting
     // "recording" before prepare() succeeds leaves the UI claiming a live
     // buffer that does not exist.
@@ -98,6 +116,7 @@ class SegmentController(
         onResult(Result.success(status()))
       }
       .onFailure { error ->
+        LocationTracker.stop()
         sessionId?.let(storage::deleteSession)
         sessionId = null
         startedAtMs = 0L
@@ -123,6 +142,8 @@ class SegmentController(
     failPendingSaves("Recording stopped before the clip could be saved")
     recorder.stopClip(discard = true)
     recorder.release()
+    // STOP discards the buffer, so the samples describing it are equally dead.
+    LocationTracker.stop()
     buffer.drain().forEach { it.file.delete() }
     sessionId?.let(storage::deleteSession)
     sessionId = null
@@ -205,7 +226,10 @@ class SegmentController(
   }
 
   fun release() {
-    executor.execute { recorder.release() }
+    executor.execute {
+      recorder.release()
+      LocationTracker.stop()
+    }
     executor.shutdown()
     mergeExecutor.shutdown()
   }

@@ -21,6 +21,25 @@ export type VideoQuality = '360p' | '480p' | '720p' | '1080p' | '4k';
 export type CameraMode = 'back' | 'front' | 'both';
 
 /**
+ * Unit for the burned-in speed.
+ *
+ * A display preference only. The sidecar is always SI regardless: a sidecar is
+ * data, and baking a preference into stored evidence produces a file that can
+ * be misread later.
+ */
+export type SpeedUnit = 'kmh' | 'mph';
+
+/**
+ * Why the burned-in speed may be reading `--`, for Settings to explain.
+ *
+ * `coarseOnly` is the one worth surfacing: Android 12+ lets the user grant
+ * approximate location, and an approximate fix carries no usable speed at all,
+ * so the stamp stays blank for the whole session with nothing else to show for
+ * it.
+ */
+export type LocationStatus = 'ok' | 'noFix' | 'coarseOnly' | 'denied' | 'disabled';
+
+/**
  * What this particular device can do, probed once at startup.
  *
  * Settings renders from this rather than offering every mode and discovering
@@ -55,8 +74,21 @@ export interface RecorderConfig {
   cameraMode: CameraMode;
   /** Record an audio track alongside video. */
   audioEnabled: boolean;
-  /** Write a GPS/speed/timestamp sidecar next to each saved clip (§7.1). */
+  /**
+   * Read GPS while recording: burn the speed into the frame beside the clock,
+   * and write a GPS/speed/timestamp sidecar next to each saved clip (§7.1).
+   *
+   * One switch for both, and for the permission prompt behind them. Off means
+   * the location client is never started and the plate is the clock alone —
+   * not a clock with a blank speed slot.
+   */
   locationTaggingEnabled: boolean;
+  /**
+   * Unit for the burned-in speed. Applies to the next frame drawn — unlike
+   * {@link cameraMode} it needs no session rebuild, so it can be changed
+   * mid-recording.
+   */
+  speedUnit: SpeedUnit;
   /** Accelerometer spike triggers an automatic Save (§8). */
   impactDetectionEnabled: boolean;
   /** Auto-save the buffer and stop below this battery level (§6). 0 disables. */

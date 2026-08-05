@@ -29,7 +29,11 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
       // Before anything reads the config: the controller starts on the type's
       // defaults, and a Play issued before JS has pushed anything — a Lock
       // Screen tap, a relaunch — must use the camera the user actually chose.
-      self.controller.configure(ConfigStore.load())
+      let stored = ConfigStore.load()
+      self.controller.configure(stored)
+      // So `getLocationStatus` can answer "disabled" before the first Play,
+      // rather than reporting a permission problem the user has not got.
+      LocationTracker.shared.configure(stored)
       // §7.2 — a temp session that survived a crash is orphaned by definition.
       self.storage.cleanupOrphanedSessions()
       // §6 — needed for the low-battery auto-save-and-stop threshold.
@@ -63,11 +67,15 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
     }
 
     AsyncFunction("requestPermissions") { (promise: Promise) in
-      // Location is deliberately not requested: the GPS sidecar (§7.1) is not
-      // in this release, and a purpose string the app never exercises is an
-      // App Review problem. Re-add CoreLocation here together with the sidecar.
       AVCaptureDevice.requestAccess(for: .video) { videoGranted in
         AVCaptureDevice.requestAccess(for: .audio) { audioGranted in
+          // Asked at the same moment as camera and mic, and deliberately not
+          // gating the promise: a driver who refuses location still gets a
+          // working dashcam, one whose footage stamps `--` where the speed
+          // would be. Asking here rather than at Play also keeps the system
+          // dialog off the screen of someone who has just started recording,
+          // quite possibly while already moving.
+          LocationTracker.shared.requestAuthorization()
           promise.resolve(videoGranted && audioGranted)
         }
       }
@@ -80,6 +88,16 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
     Function("hasPermissions") {
       AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
+
+    /// Why the burned-in speed is reading `--`, for Settings to explain.
+    ///
+    /// A permanently blank speed field has several quite different causes — no
+    /// lock yet, a tunnel, a refused permission, precise location switched off
+    /// — and on a screen the driver only looks at while parked, guessing which
+    /// is not something to leave to them.
+    Function("getLocationStatus") {
+      LocationTracker.shared.status().rawValue
     }
 
     /// Light the viewfinder without recording.

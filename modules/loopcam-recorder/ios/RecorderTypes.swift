@@ -50,6 +50,32 @@ enum CameraMode: String, CaseIterable {
   case both
 }
 
+/// Unit for the burned-in speed. Mirrors `SpeedUnit` on the JS side.
+///
+/// A display preference only — the sidecar is always SI regardless (§Part 3).
+/// Baking a preference into stored evidence means a file that can be misread
+/// later; baking it into the picture is unavoidable and is why the unit is
+/// always drawn next to the number.
+enum SpeedUnit: String, CaseIterable {
+  case kmh
+  case mph
+
+  var label: String {
+    switch self {
+    case .kmh: return "km/h"
+    case .mph: return "mph"
+    }
+  }
+
+  /// Multiplier from metres per second into this unit.
+  var perMps: Double {
+    switch self {
+    case .kmh: return 3.6
+    case .mph: return 2.236_936_292_054_402
+    }
+  }
+}
+
 /// §2.1 — the two independent settings, plus the v1 feature toggles.
 struct RecorderConfig: Record {
   @Field var clipDurationSec: Double = 10
@@ -58,6 +84,7 @@ struct RecorderConfig: Record {
   @Field var cameraMode: String = "back"
   @Field var audioEnabled: Bool = true
   @Field var locationTaggingEnabled: Bool = true
+  @Field var speedUnit: String = "kmh"
   @Field var impactDetectionEnabled: Bool = true
   @Field var autoStopBatteryPercent: Int = 15
 
@@ -75,6 +102,10 @@ struct RecorderConfig: Record {
     CameraMode(rawValue: cameraMode) ?? .back
   }
 
+  var speed: SpeedUnit {
+    SpeedUnit(rawValue: speedUnit) ?? .kmh
+  }
+
   func asDictionary() -> [String: Any] {
     [
       "clipDurationSec": clipDurationSec,
@@ -83,6 +114,7 @@ struct RecorderConfig: Record {
       "cameraMode": cameraMode,
       "audioEnabled": audioEnabled,
       "locationTaggingEnabled": locationTaggingEnabled,
+      "speedUnit": speedUnit,
       "impactDetectionEnabled": impactDetectionEnabled,
       "autoStopBatteryPercent": autoStopBatteryPercent,
     ]

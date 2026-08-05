@@ -38,6 +38,11 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
 
     OnCreate {
       live = this@LoopcamRecorderModule
+      // The tracker outlives every Activity — the foreground service keeps
+      // recording with the app swiped away — so it is given the application
+      // context here, once, rather than reaching for whatever is current.
+      LocationTracker.attach(context)
+      LocationTracker.configure(configStore.load())
       // §7.2 — a temp session that survived a process death is orphaned by
       // definition; sweep before anything else touches the buffer.
       storage.cleanupOrphanedSessions()
@@ -84,14 +89,24 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
       // install-time, not runtime — asking for it here would resolve false and
       // lock Play out entirely.
       val required = REQUIRED_PERMISSIONS
-      val optional = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        arrayOf(Manifest.permission.POST_NOTIFICATIONS)
-      } else {
-        emptyArray()
-      }
-      // Location is deliberately not requested: the GPS sidecar (§7.1) is not in
-      // this release, and a permission the app never uses is a Play policy
-      // problem. Re-add ACCESS_FINE_LOCATION here together with the sidecar.
+      // Asked at the same moment as camera and mic, and optional for the same
+      // reason POST_NOTIFICATIONS is: a driver who refuses location still gets a
+      // working dashcam, one whose footage stamps `--` where the speed would be.
+      // Requesting it here rather than at Play also keeps the system dialog off
+      // the screen of someone who has just started recording, quite possibly
+      // while already moving.
+      val optional = buildList {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+          add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        // Coarse alongside fine because Android 12+ shows the user a choice
+        // between them, and asking for fine alone offers no approximate option
+        // at all. A coarse-only grant is detected by LocationTracker and
+        // reported through getLocationStatus rather than silently burning in
+        // numbers from network positioning.
+        add(Manifest.permission.ACCESS_FINE_LOCATION)
+        add(Manifest.permission.ACCESS_COARSE_LOCATION)
+      }.toTypedArray()
       val permissionsManager = appContext.permissions
       if (permissionsManager == null) {
         promise.resolve(false)
@@ -112,6 +127,18 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
       REQUIRED_PERMISSIONS.all {
         ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
       }
+    }
+
+    /**
+     * Why the burned-in speed is reading `--`, for Settings to explain.
+     *
+     * A permanently blank speed field has several quite different causes — no
+     * lock yet, a tunnel, a refused permission, an approximate-only grant — and
+     * on a screen the driver only looks at while parked, guessing which is not
+     * something to leave to them.
+     */
+    Function("getLocationStatus") {
+      LocationTracker.status().jsValue
     }
 
     /**

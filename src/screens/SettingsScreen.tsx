@@ -1,17 +1,40 @@
+import { useMemo } from 'react';
 import { Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import {
   CAMERA_MODE_LABELS,
   CAMERA_MODE_UNAVAILABLE,
+  LoopcamRecorder,
   QUALITY_LADDER,
   type CameraMode,
+  type LocationStatus,
+  type SpeedUnit,
 } from '../../modules/loopcam-recorder';
-import { SettingRow } from '../components/SettingRow';
+import { SettingRow, SettingSwitch } from '../components/SettingRow';
 import { useRecorder } from '../hooks/useRecorder';
 import { colors, legend, radius } from '../theme';
 import { STATUS_BAR_INSET } from './RecorderScreen';
 
 const MODES: CameraMode[] = ['back', 'front', 'both'];
+
+const SPEED_UNITS: { value: SpeedUnit; label: string }[] = [
+  { value: 'kmh', label: 'km/h' },
+  { value: 'mph', label: 'mph' },
+];
+
+/**
+ * Why the speed field is blank, in the driver's words.
+ *
+ * Only the causes the user can do something about get a line. `noFix` and `ok`
+ * deliberately say nothing: a receiver that has not locked yet resolves itself
+ * within half a minute, and a note that appears and disappears on its own would
+ * read as a fault rather than as normal cold-start behaviour.
+ */
+const LOCATION_NOTES: Partial<Record<LocationStatus, string>> = {
+  denied: 'Location access is off — the stamp will show ‑‑ instead of a speed.',
+  coarseOnly:
+    'Approximate location cannot measure speed. Switch to precise location to burn a speed in.',
+};
 
 /**
  * Settings.
@@ -42,6 +65,16 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     capabilities.qualities.both.length < capabilities.qualities.back.length
       ? capabilities.qualities.both[capabilities.qualities.both.length - 1]
       : null;
+
+  /**
+   * Re-read whenever the toggle changes, which is the only moment on this
+   * screen that can turn a permission problem into a visible one. Synchronous
+   * and side-effect free on both platforms — it never raises a dialog.
+   */
+  const locationNote = useMemo(
+    () => (config.locationTaggingEnabled ? LOCATION_NOTES[LoopcamRecorder.getLocationStatus()] : undefined),
+    [config.locationTaggingEnabled]
+  );
 
   return (
     <SafeAreaView style={styles.root}>
@@ -110,6 +143,36 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             Both cameras are limited to {dualCap} on this phone.
           </Text>
         ) : null}
+
+        <Text style={styles.section}>GPS speed</Text>
+        <View style={styles.group}>
+          <SettingSwitch
+            first
+            label="Record speed and position"
+            note={locationNote}
+            value={config.locationTaggingEnabled}
+            onValueChange={(locationTaggingEnabled) => applyConfig({ locationTaggingEnabled })}
+          />
+          {/* Nested rather than a separate group: the unit is meaningless with
+              the switch off, and hiding it entirely would make the group jump
+              in height every time the switch is flipped. */}
+          {SPEED_UNITS.map(({ value, label }) => (
+            <SettingRow
+              key={value}
+              label={label}
+              selected={config.speedUnit === value}
+              disabled={!config.locationTaggingEnabled}
+              onPress={() => applyConfig({ speedUnit: value })}
+            />
+          ))}
+        </View>
+        {/* Unlike the camera and quality rows, neither of these is disabled
+            while recording: they change what the next frame draws and nothing
+            about the capture session, so there is nothing to rebuild. */}
+        <Text style={styles.footnote}>
+          The speed is burned into saved footage next to the clock, and written to a JSON file
+          beside each clip. Nothing leaves your phone. Applies immediately, even while recording.
+        </Text>
       </ScrollView>
     </SafeAreaView>
   );

@@ -138,7 +138,15 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     // Two overlays, not one: the stamp belongs on the file, not on the screen a
     // driver is glancing at while moving. Both draw the same inset off the same
     // [frontFeed], so the corner still matches between the two.
-    val videoWatermark = WatermarkOverlay(WatermarkOverlay.VIDEO_TARGETS, frontFeed, showStamp = true)
+    val videoWatermark = WatermarkOverlay(
+      WatermarkOverlay.VIDEO_TARGETS,
+      frontFeed,
+      showStamp = true,
+      // The speed rides along with the stamp, so only the file carries it — and
+      // only when the driver asked for location at all.
+      showSpeed = config.locationTaggingEnabled,
+      speedUnit = config.speed,
+    )
     val previewWatermark =
       WatermarkOverlay(WatermarkOverlay.PREVIEW_TARGETS, frontFeed, showStamp = false)
 
@@ -215,6 +223,20 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     sessionVideoWatermark = videoWatermark
     sessionPreviewWatermark = previewWatermark
     sessionFrontAnalysis = frontAnalysis
+  }
+
+  /**
+   * The speed settings, straight onto the live overlay.
+   *
+   * Only the video overlay carries a stamp, so only it has anything to change.
+   * Assigning two volatile fields is the whole operation — no rebind, no
+   * dropped clip, and the next frame drawn already says mph.
+   */
+  override fun applyLiveConfig(config: RecorderConfig) {
+    sessionVideoWatermark?.let {
+      it.showSpeed = config.locationTaggingEnabled
+      it.speedUnit = config.speed
+    }
   }
 
   /**

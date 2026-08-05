@@ -39,6 +39,7 @@ export const DEFAULT_CONFIG: RecorderConfig = {
   cameraMode: 'back',
   audioEnabled: true,
   locationTaggingEnabled: true,
+  speedUnit: 'kmh',
   impactDetectionEnabled: true,
   autoStopBatteryPercent: 15,
 };
