@@ -23,7 +23,6 @@ local.properties
 captures/
 *.apk
 *.aab
-*.keystore
 
 # Xcode / CocoaPods
 Pods/
