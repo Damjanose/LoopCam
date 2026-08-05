@@ -4,7 +4,7 @@
   "main": "index.ts",
   "dependencies": {
     "@bacons/apple-targets": "^5.0.0",
-    "expo": "~57.0.9",
+    "expo": "~57.0.10",
     "expo-build-properties": "~57.0.8",
     "expo-navigation-bar": "~57.0.2",
     "expo-sharing": "~57.0.8",

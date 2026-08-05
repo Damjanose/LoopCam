@@ -69,8 +69,9 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
       } else {
         emptyArray()
       }
-      // TODO(phase-2): also prompt for ACCESS_FINE_LOCATION when GPS tagging is
-      // on, and deep-link OEM battery-whitelist screens on first run (§10).
+      // Location is deliberately not requested: the GPS sidecar (§7.1) is not in
+      // this release, and a permission the app never uses is a Play policy
+      // problem. Re-add ACCESS_FINE_LOCATION here together with the sidecar.
       val permissionsManager = appContext.permissions
       if (permissionsManager == null) {
         promise.resolve(false)
