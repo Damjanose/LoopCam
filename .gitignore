@@ -35,6 +35,7 @@ DerivedData/
 *.dSYM.zip
 
 # signing material
+.keystore-password.txt
 *.jks
 *.p8
 *.p12
