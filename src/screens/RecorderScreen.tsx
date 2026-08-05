@@ -1,4 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
+import { useEffect, useState } from 'react';
 import {
   Pressable,
   SafeAreaView,
@@ -24,8 +25,28 @@ const formatDuration = (seconds: number) => {
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 };
 
-/** Ticks in the buffer gauge. Enough to read as a bar, few enough to count. */
-const SEGMENTS = 28;
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/** `dd/mm/yyyy hh:mm:ss` — fixed order, so it is read the same way every glance. */
+const formatStamp = (d: Date) =>
+  `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ` +
+  `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+/**
+ * The wall clock, re-rendered on the second it changes rather than on a free
+ * 1 s interval: an interval started at an arbitrary phase drifts against the
+ * system clock and visibly skips a second every so often.
+ */
+function useWallClock() {
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const id = setTimeout(() => setNow(new Date()), 1000 - (now.getTime() % 1000));
+    return () => clearTimeout(id);
+  }, [now]);
+
+  return formatStamp(now);
+}
 
 /**
  * Shutter geometry, from the stock camera apps: an outer ring that never moves
@@ -42,76 +63,64 @@ const SLOT = 62;
  * Everything is sized for a single glance at arm's length — no small text, no
  * controls that need aim.
  */
-export default function RecorderScreen({ onOpenSaved }: { onOpenSaved: () => void }) {
+export default function RecorderScreen({
+  onOpenSaved,
+  onOpenSettings,
+}: {
+  onOpenSaved: () => void;
+  onOpenSettings: () => void;
+}) {
   const {
     status,
     isRecording,
-    bufferFill,
     lastSaved,
     error,
     storageWarning,
     busy,
-    config,
     play,
     stop,
     save,
   } =
     useRecorder();
 
+  const stamp = useWallClock();
+
   return (
     <View style={styles.root}>
       <StatusBar style="light" />
       <LoopcamRecorderView style={StyleSheet.absoluteFill} lens="back" resizeMode="cover" />
 
-      {/* Corner brackets frame the feed as a viewfinder rather than a video. */}
-      <View pointerEvents="none" style={styles.reticle}>
-        <View style={[styles.corner, styles.cornerTL]} />
-        <View style={[styles.corner, styles.cornerTR]} />
-        <View style={[styles.corner, styles.cornerBL]} />
-        <View style={[styles.corner, styles.cornerBR]} />
-      </View>
-
       <SafeAreaView style={styles.overlay}>
+        {/* No panel: the dot and the clock carry the state, so a card behind
+            them would only cover road. The word "Standby" said nothing the
+            unlit dot and the 00:00 clock do not. */}
         <View style={styles.header}>
-          <View style={styles.hud}>
-            <View style={styles.headerRow}>
-              <View style={styles.state}>
-                <View style={[styles.dot, isRecording && styles.dotLive]} />
-                <Text style={[styles.stateLabel, isRecording && styles.stateLabelLive]}>
-                  {isRecording ? 'Rec' : 'Standby'}
-                </Text>
-              </View>
-              {/* Reachable mid-drive on purpose: browsing saved clips never
-                  interrupts the buffer. */}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Saved clips"
-                onPress={onOpenSaved}
-                style={({ pressed }) => [styles.savedLink, pressed && styles.buttonPressed]}>
-                <Text style={styles.savedLinkLabel}>Saved</Text>
-                <Text style={styles.savedLinkChevron}>›</Text>
-              </Pressable>
+          <View style={styles.headerRow}>
+            <View style={styles.state}>
+              <View style={[styles.dot, isRecording && styles.dotLive]} />
+              <Text style={styles.elapsed}>{formatDuration(status.elapsedSec)}</Text>
             </View>
 
-            <Text style={styles.elapsed}>{formatDuration(status.elapsedSec)}</Text>
-
-            {/* The buffer meter is the whole product in one bar: how much footage
-                pressing Save would actually keep. Segmented like a charge gauge,
-                so a half-full buffer is countable and not just estimated. */}
-            <View style={styles.meter}>
-              {Array.from({ length: SEGMENTS }, (_, i) => (
-                <View
-                  key={i}
-                  style={[styles.segment, i < Math.round(bufferFill * SEGMENTS) && styles.segmentOn]}
-                />
-              ))}
-            </View>
-
-            <Text style={styles.caption}>
-              {isRecording
-                ? `Holding last ${formatDuration(status.bufferedSec)} · ${status.clipCount}/${status.maxClips} clips`
-                : `Ready · ${config.bufferDurationSec / 60} min buffer`}
-            </Text>
+            {/* Reachable mid-drive on purpose: browsing saved clips never
+                interrupts the buffer. */}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Saved clips"
+              onPress={onOpenSaved}
+              style={({ pressed }) => [styles.savedLink, pressed && styles.buttonPressed]}>
+              <Text style={styles.savedLinkLabel}>Saved</Text>
+              <Text style={styles.savedLinkChevron}>›</Text>
+            </Pressable>
+            {/* Icon-only: settings are a rare, parked-car errand, so it takes
+                the smallest target on the HUD rather than a labelled one. */}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Settings"
+              onPress={onOpenSettings}
+              hitSlop={8}
+              style={({ pressed }) => [styles.iconButton, pressed && styles.buttonPressed]}>
+              <Text style={styles.iconGlyph}>⚙</Text>
+            </Pressable>
           </View>
         </View>
 
@@ -127,7 +136,9 @@ export default function RecorderScreen({ onOpenSaved }: { onOpenSaved: () => voi
                   styles.toastLabel,
                   error || storageWarning ? styles.toastLabelError : styles.toastLabelOk,
                 ]}>
-                {error ?? storageWarning ?? `Saved ${lastSaved?.id}`}
+                {/* The clip id is filename plumbing, not news — mid-drive the
+                    only thing worth reading is that the save landed. */}
+                {error ?? storageWarning ?? 'Saved ✓'}
               </Text>
             </View>
           )}
@@ -183,6 +194,11 @@ export default function RecorderScreen({ onOpenSaved }: { onOpenSaved: () => voi
               <View style={styles.slot} />
             )}
           </View>
+
+          {/* Last line on the screen, in the bottom-right corner — the same
+              corner the watermark burns into the footage, so what is on screen
+              matches what a saved clip will show. */}
+          <Text style={styles.stamp}>{stamp}</Text>
         </View>
       </SafeAreaView>
     </View>
@@ -193,38 +209,22 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.void },
   overlay: { flex: 1, justifyContent: 'space-between' },
 
-  reticle: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, margin: 14 },
-  corner: {
-    position: 'absolute',
-    width: 22,
-    height: 22,
-    borderColor: 'rgba(238,242,248,0.35)',
-  },
-  cornerTL: { top: STATUS_BAR_INSET, left: 0, borderTopWidth: 1.5, borderLeftWidth: 1.5 },
-  cornerTR: { top: STATUS_BAR_INSET, right: 0, borderTopWidth: 1.5, borderRightWidth: 1.5 },
-  cornerBL: { bottom: 0, left: 0, borderBottomWidth: 1.5, borderLeftWidth: 1.5 },
-  cornerBR: { bottom: 0, right: 0, borderBottomWidth: 1.5, borderRightWidth: 1.5 },
-
   header: { paddingHorizontal: 16, paddingTop: STATUS_BAR_INSET + 16 },
-  /** One floating readout panel, so the feed behind it never eats the numbers. */
-  hud: {
-    gap: 12,
-    padding: 18,
-    borderRadius: radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.hairline,
-    backgroundColor: colors.glass,
-  },
-  headerRow: { flexDirection: 'row', alignItems: 'center' },
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  /**
+   * The clock keeps its own glass behind it — the readouts float over the feed
+   * now, and a bright sky would otherwise swallow the one number that matters.
+   */
   state: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+    gap: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: radius.pill,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.hairline,
+    backgroundColor: colors.glass,
   },
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.textFaint },
   dotLive: {
@@ -235,9 +235,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     elevation: 4,
   },
-  stateLabel: { ...legend, color: colors.textDim },
-  stateLabelLive: { color: colors.text },
-
   savedLink: {
     marginLeft: 'auto',
     flexDirection: 'row',
@@ -252,22 +249,37 @@ const styles = StyleSheet.create({
   savedLinkLabel: { ...legend, color: colors.text },
   savedLinkChevron: { color: colors.textDim, fontSize: 16, marginTop: -2 },
 
+  /** Square-ish pill, same height as the Saved link so the row reads as one. */
+  iconButton: {
+    width: 38,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.hairlineStrong,
+  },
+  iconGlyph: { color: colors.text, fontSize: 17, lineHeight: 20 },
+
   elapsed: {
     color: colors.text,
     fontFamily: mono,
-    fontSize: 52,
-    lineHeight: 56,
-    letterSpacing: -1,
+    fontSize: 30,
+    lineHeight: 34,
+    letterSpacing: -0.5,
     fontVariant: ['tabular-nums'],
   },
 
-  meter: { flexDirection: 'row', gap: 3, height: 12, alignItems: 'stretch' },
-  segment: { flex: 1, borderRadius: 1, backgroundColor: 'rgba(238,242,248,0.10)' },
-  segmentOn: { backgroundColor: colors.accent },
-
-  caption: { color: colors.textDim, fontSize: 13, letterSpacing: 0.2 },
-
   footer: { paddingHorizontal: 16, paddingBottom: 24, gap: 12 },
+  /** Tabular figures: the seconds tick without the whole line reflowing. */
+  stamp: {
+    alignSelf: 'flex-end',
+    color: colors.textDim,
+    fontFamily: mono,
+    fontSize: 13,
+    letterSpacing: 0.4,
+    fontVariant: ['tabular-nums'],
+  },
   toast: {
     alignSelf: 'center',
     paddingVertical: 8,

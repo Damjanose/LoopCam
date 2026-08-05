@@ -20,6 +20,9 @@ const snapshotOf = (status: BufferStatus): Snapshot => ({ status, at: Date.now()
 /** How often the extrapolated readouts re-render. */
 const TICK_MS = 250;
 
+/** How long the save confirmation stays up before it clears itself. */
+const SAVED_TOAST_MS = 2000;
+
 /**
  * How far the clock may disagree with native before it re-syncs instead of
  * riding its own anchor. Wide enough to ignore event-delivery lag, tight enough
@@ -72,6 +75,20 @@ export function useRecorder() {
     ];
     return () => subscriptions.forEach((subscription) => subscription.remove());
   }, [setStatus]);
+
+  /**
+   * The save confirmation is an acknowledgement, not a state: once it has been
+   * seen there is nothing to act on, and a banner that stays put over the feed
+   * only hides road. Errors and storage notices deliberately do not expire.
+   *
+   * Keyed on the clip, so a second save restarts the window rather than
+   * inheriting the first one's remaining time.
+   */
+  useEffect(() => {
+    if (!lastSaved) return;
+    const id = setTimeout(() => setLastSaved(null), SAVED_TOAST_MS);
+    return () => clearTimeout(id);
+  }, [lastSaved]);
 
   const run = useCallback(async (action: () => Promise<unknown>) => {
     setBusy(true);

@@ -3,9 +3,10 @@ import { NavigationBar } from 'expo-navigation-bar';
 
 import RecorderScreen from './src/screens/RecorderScreen';
 import SavedClipsScreen from './src/screens/SavedClipsScreen';
+import SettingsScreen from './src/screens/SettingsScreen';
 
 /**
- * Two screens do not earn a navigator. Swapping on state keeps the entry point
+ * A flat set of screens off the recorder does not earn a navigator. Swapping on state keeps the entry point
  * dependency-free, and — because the rolling buffer is owned by the foreground
  * service rather than the React tree — unmounting the recorder to browse saved
  * clips does not interrupt a recording.
@@ -13,18 +14,21 @@ import SavedClipsScreen from './src/screens/SavedClipsScreen';
  * TODO(phase-3): promote this to a real navigator once settings lands.
  */
 export default function App() {
-  const [screen, setScreen] = useState<'recorder' | 'saved'>('recorder');
+  const [screen, setScreen] = useState<'recorder' | 'saved' | 'settings'>('recorder');
 
   return (
     <>
       {/* Android only: immersive-sticky, so a swipe reveals the bar transiently
           and it re-hides itself. No-op on iOS. */}
       <NavigationBar hidden style="light" />
-      {screen === 'recorder' ? (
-        <RecorderScreen onOpenSaved={() => setScreen('saved')} />
-      ) : (
-        <SavedClipsScreen onBack={() => setScreen('recorder')} />
+      {screen === 'recorder' && (
+        <RecorderScreen
+          onOpenSaved={() => setScreen('saved')}
+          onOpenSettings={() => setScreen('settings')}
+        />
       )}
+      {screen === 'saved' && <SavedClipsScreen onBack={() => setScreen('recorder')} />}
+      {screen === 'settings' && <SettingsScreen onBack={() => setScreen('recorder')} />}
     </>
   );
 }
