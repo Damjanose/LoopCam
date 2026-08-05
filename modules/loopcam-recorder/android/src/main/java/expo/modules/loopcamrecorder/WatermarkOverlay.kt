@@ -3,8 +3,10 @@ package expo.modules.loopcamrecorder
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PorterDuff
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.Handler
 import android.os.HandlerThread
@@ -17,7 +19,12 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * The burned-in wall clock (§ watermark spec).
+ * The burned-in wall clock, and — in `both` mode — the front camera's inset
+ * picture beside it.
+ *
+ * Both live in the same effect because they are the same job: everything drawn
+ * onto the frame between the sensor and the encoder, in displayed coordinates,
+ * on one canvas pass.
  *
  * Drawn at *capture*, not at merge. Save is a stream-copy concat, and drawing
  * text at merge time would mean decoding, compositing and re-encoding the whole
@@ -32,7 +39,11 @@ import java.util.Locale
  * Everything here runs on [thread] — CameraX calls the draw listener there and
  * nowhere else, which is why the caches below need no synchronisation.
  */
-internal class WatermarkOverlay(targets: Int) : AutoCloseable {
+internal class WatermarkOverlay(
+  targets: Int,
+  /** The front camera in `both` mode; null in the single-camera modes. */
+  private val pip: FrontCameraFeed? = null,
+) : AutoCloseable {
 
   private val thread = HandlerThread("loopcam-watermark").apply { start() }
 
@@ -50,6 +61,15 @@ internal class WatermarkOverlay(targets: Int) : AutoCloseable {
     color = WatermarkStyle.PLATE_COLOR
   }
   private val formatter = SimpleDateFormat(WatermarkStyle.PATTERN, Locale.US)
+
+  /** FILTER_BITMAP: the inset is a downscale, and a nearest-neighbour one crawls. */
+  private val pipPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+  private val pipBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    style = Paint.Style.STROKE
+    color = WatermarkStyle.Pip.BORDER_COLOR
+  }
+  /** Reused rather than allocated per frame — this runs 30 times a second. */
+  private val pipClip = Path()
 
   /**
    * Frame timestamps are on a monotonic clock; the watermark is a wall clock.
@@ -89,6 +109,10 @@ internal class WatermarkOverlay(targets: Int) : AutoCloseable {
     // come out on its side in every player, which is the failure this mapping
     // exists to prevent.
     applyDisplayTransform(canvas, crop, rotation)
+    // Inset first, clock second. They do not overlap by construction — opposite
+    // corners — but fixing the order means a later change to either one's
+    // geometry cannot end up burying the timestamp.
+    drawPip(canvas, displayWidth, displayHeight)
     drawStamp(canvas, frame.timestampNanos, displayWidth, displayHeight)
     canvas.restore()
   }
@@ -118,6 +142,58 @@ internal class WatermarkOverlay(targets: Int) : AutoCloseable {
         canvas.rotate(90f)
       }
     }
+  }
+
+  /**
+   * The front camera in the top-right corner, centre-cropped to fill.
+   *
+   * Scaled with a source rect rather than by pre-scaling the bitmap: the
+   * analyzer already delivers something close to this size, and letting the
+   * canvas do the last bit of scaling keeps the whole thing one draw call.
+   *
+   * A null frame — no `both` mode, or a front camera that has gone quiet for
+   * longer than the staleness window — simply draws nothing. The corner going
+   * empty reads as "the front camera stopped"; a frozen picture would not.
+   */
+  private fun drawPip(canvas: Canvas, width: Float, height: Float) {
+    val bitmap = pip?.current(System.currentTimeMillis()) ?: return
+    if (bitmap.width <= 0 || bitmap.height <= 0) return
+
+    val pipWidth = width * WatermarkStyle.Pip.WIDTH_FRACTION
+    val pipHeight = pipWidth / WatermarkStyle.Pip.ASPECT
+    val inset = minOf(width, height) * WatermarkStyle.INSET_FRACTION
+    val right = width - inset
+    val left = right - pipWidth
+    val top = inset
+    val bottom = top + pipHeight
+    val dst = RectF(left, top, right, bottom)
+
+    // Centre-crop: the widest (or tallest) centred slice of the source that
+    // matches the destination's aspect. Fitting instead would put black bars
+    // inside an already-small inset, which reads as a dead feed.
+    val sourceAspect = bitmap.width.toFloat() / bitmap.height
+    val targetAspect = pipWidth / pipHeight
+    val src = if (sourceAspect > targetAspect) {
+      val cropWidth = bitmap.height * targetAspect
+      val x = ((bitmap.width - cropWidth) / 2f).toInt()
+      Rect(x, 0, x + cropWidth.toInt(), bitmap.height)
+    } else {
+      val cropHeight = bitmap.width / targetAspect
+      val y = ((bitmap.height - cropHeight) / 2f).toInt()
+      Rect(0, y, bitmap.width, y + cropHeight.toInt())
+    }
+
+    val corner = pipHeight * WatermarkStyle.Pip.CORNER_FRACTION
+    pipClip.reset()
+    pipClip.addRoundRect(dst, corner, corner, Path.Direction.CW)
+
+    canvas.save()
+    canvas.clipPath(pipClip)
+    canvas.drawBitmap(bitmap, src, dst, pipPaint)
+    canvas.restore()
+
+    pipBorderPaint.strokeWidth = minOf(width, height) * WatermarkStyle.Pip.BORDER_WIDTH_FRACTION
+    canvas.drawRoundRect(dst, corner, corner, pipBorderPaint)
   }
 
   private fun drawStamp(canvas: Canvas, frameTimestampNanos: Long, width: Float, height: Float) {

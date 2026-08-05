@@ -9,7 +9,31 @@
 /** §2.3 state machine. */
 export type RecorderState = 'idle' | 'recording' | 'saving' | 'stopping';
 
-export type VideoQuality = '720p' | '1080p' | '4k';
+export type VideoQuality = '360p' | '480p' | '720p' | '1080p' | '4k';
+
+/**
+ * Which camera(s) feed the buffer.
+ *
+ * `both` is a *composite*, not two files: the front camera is burned into the
+ * top-right of the back camera's frame at capture, so a saved clip is exactly
+ * what the viewfinder showed. Hardware-gated — see {@link CameraCapabilities}.
+ */
+export type CameraMode = 'back' | 'front' | 'both';
+
+/**
+ * What this particular device can do, probed once at startup.
+ *
+ * Settings renders from this rather than offering every mode and discovering
+ * at Play that the hardware refuses: on a dash mount a toast is never read, and
+ * a recorder that silently records something other than what was asked for is
+ * worse than one that never offered.
+ */
+export interface CameraCapabilities {
+  /** Modes this device can actually run. Always contains `back`. */
+  modes: CameraMode[];
+  /** Selectable tiers per mode. `4k` never appears under `both`. */
+  qualities: Record<CameraMode, VideoQuality[]>;
+}
 
 /**
  * The two independent settings from §2.1. Everything downstream — how many
@@ -23,6 +47,12 @@ export interface RecorderConfig {
   /** Total footage retained before Save. Typical range 30 s – 15 min. */
   bufferDurationSec: number;
   quality: VideoQuality;
+  /**
+   * Which camera(s) record. Applied when the session is next built — changing
+   * it mid-recording would mean rebinding the capture session, which drops the
+   * clip in flight and puts a seam in the buffer.
+   */
+  cameraMode: CameraMode;
   /** Record an audio track alongside video. */
   audioEnabled: boolean;
   /** Write a GPS/speed/timestamp sidecar next to each saved clip (§7.1). */

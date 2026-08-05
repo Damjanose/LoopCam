@@ -2,10 +2,17 @@ package expo.modules.loopcamrecorder
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.util.Log
+import android.util.Size
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraState
+import androidx.camera.core.ConcurrentCamera
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCaseGroup
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
@@ -21,6 +28,7 @@ import androidx.lifecycle.Observer
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
@@ -69,6 +77,25 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
    */
   private var sessionWatermark: WatermarkOverlay? = null
   private var standbyWatermark: WatermarkOverlay? = null
+
+  /**
+   * The front camera's use case in `both` mode, one per binding for the same
+   * reason the watermarks are. Null in the single-camera modes, and null on a
+   * device where the concurrent bind was refused — in which case the overlay
+   * simply finds no frame to draw and the corner stays empty.
+   */
+  private var sessionFrontAnalysis: ImageAnalysis? = null
+  private var standbyFrontAnalysis: ImageAnalysis? = null
+
+  /**
+   * One thread for the YUV→bitmap conversion, kept for the process's life
+   * rather than created per session: it is idle between bindings, and churning
+   * an executor at every Play would be a thread created on the critical path of
+   * starting to record.
+   */
+  private val analysisExecutor = Executors.newSingleThreadExecutor { runnable ->
+    Thread(runnable, "loopcam-front").apply { isDaemon = true }
+  }
   private var activeRecording: Recording? = null
   private var stateSource: LiveData<CameraState>? = null
   private var stateObserver: Observer<CameraState>? = null
@@ -97,7 +124,12 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     // against a VideoCapture whose camera is still opening. Failures propagate
     // instead of being logged, so Play reports "camera unavailable" rather than
     // silently idling.
-    val watermark = WatermarkOverlay(WatermarkOverlay.SESSION_TARGETS)
+    val mode = config.camera
+    // The front camera exists only to be drawn into the corner, so it is an
+    // analysis stream feeding the overlay rather than a second recording.
+    val frontFeed = if (mode == CameraMode.BOTH) FrontCameraFeed() else null
+    val frontAnalysis = frontFeed?.let { newFrontAnalysis(it) }
+    val watermark = WatermarkOverlay(WatermarkOverlay.SESSION_TARGETS, frontFeed)
 
     val latch = CountDownLatch(1)
     var failure: Throwable? = null
@@ -108,18 +140,19 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
         // stale use case that `stopPreview` later unbinds — taking the live
         // session's picture down with it.
         standbyPreview = null
+        standbyFrontAnalysis = null
         standbyWatermark?.close()
         standbyWatermark = null
         // One group rather than loose use cases, because an effect can only be
-        // attached to a group. The timestamp therefore reaches the encoder and
-        // the screen from the same composite — what the driver sees framed is
-        // what the file will show.
+        // attached to a group. The timestamp and the inset therefore reach the
+        // encoder and the screen from the same composite — what the driver sees
+        // framed is what the file will show.
         val group = UseCaseGroup.Builder()
           .addUseCase(preview)
           .addUseCase(capture)
           .addEffect(watermark.effect)
           .build()
-        val camera = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, group)
+        val camera = bind(provider, owner, mode, group, frontAnalysis)
         // Whichever preview view is mounted now — or mounts later — gets this
         // session's frames, without either side owning the other (§3.1).
         CameraPreviewBus.subscribe { surfaceProvider -> preview.setSurfaceProvider(surfaceProvider) }
@@ -165,7 +198,75 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     videoCapture = capture
     previewUseCase = preview
     sessionWatermark = watermark
+    sessionFrontAnalysis = frontAnalysis
   }
+
+  /**
+   * Which camera(s) the group binds to.
+   *
+   * `both` is CameraX's *concurrent camera*: two independent bindings, one per
+   * physical camera, submitted together. It is not universally supported, which
+   * is why [CameraProbe] gates the mode before the user can ever select it — but
+   * a bind can still be refused at runtime by a device that reported support,
+   * and a dashcam that will not record the road because the selfie camera was
+   * unavailable would be a far worse failure than a missing inset. So a refusal
+   * falls back to the back camera alone: the overlay finds no front frame and
+   * leaves the corner empty.
+   */
+  private fun bind(
+    provider: ProcessCameraProvider,
+    owner: LifecycleOwner,
+    mode: CameraMode,
+    group: UseCaseGroup,
+    frontAnalysis: ImageAnalysis?,
+  ): Camera {
+    if (mode == CameraMode.BOTH && frontAnalysis != null) {
+      val front = UseCaseGroup.Builder().addUseCase(frontAnalysis).build()
+      runCatching {
+        provider.bindToLifecycle(
+          listOf(
+            ConcurrentCamera.SingleCameraConfig(CameraSelector.DEFAULT_BACK_CAMERA, group, owner),
+            ConcurrentCamera.SingleCameraConfig(CameraSelector.DEFAULT_FRONT_CAMERA, front, owner),
+          )
+        )
+      }
+        .onSuccess { return it.cameras.first() }
+        .onFailure { Log.w(TAG, "Concurrent camera bind refused; recording back only", it) }
+      // The refused bind may have left the group half-attached.
+      provider.unbindAll()
+    }
+    return provider.bindToLifecycle(owner, selectorFor(mode), group)
+  }
+
+  private fun selectorFor(mode: CameraMode): CameraSelector = when (mode) {
+    // `both` records *into* the back camera's frame, so the back camera is the
+    // one that carries the video capture; the front is the second binding.
+    CameraMode.BACK, CameraMode.BOTH -> CameraSelector.DEFAULT_BACK_CAMERA
+    CameraMode.FRONT -> CameraSelector.DEFAULT_FRONT_CAMERA
+  }
+
+  /**
+   * The front camera's stream: small, latest-only, and analysed rather than
+   * previewed.
+   *
+   * The requested size is roughly what the inset occupies on a 1080p frame.
+   * Asking for the front camera's full resolution would mean converting several
+   * megapixels per frame on the CPU to draw a picture a third of an inch wide.
+   */
+  private fun newFrontAnalysis(feed: FrontCameraFeed): ImageAnalysis =
+    ImageAnalysis.Builder()
+      // Latest-only: a queued front frame is a stale one by the time it is
+      // drawn, and the overlay only ever wants the newest.
+      .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+      .setResolutionSelector(
+        ResolutionSelector.Builder()
+          .setResolutionStrategy(
+            ResolutionStrategy(PIP_ANALYSIS_SIZE, ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER)
+          )
+          .build()
+      )
+      .build()
+      .also { it.setAnalyzer(analysisExecutor, feed) }
 
   /**
    * Every quality the session will accept, best first.
@@ -184,6 +285,9 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
    */
   private fun qualityLadder(requested: VideoQuality): List<Quality> {
     val preferred = when (requested) {
+      // Both land on SD: CameraX has no 360p tier, and `Quality.LOWEST` means
+      // 176x144 on some hardware — useless as evidence. See [VideoQuality].
+      VideoQuality.SD_360, VideoQuality.SD_480 -> Quality.SD
       VideoQuality.HD_720 -> Quality.HD
       VideoQuality.HD_1080 -> Quality.FHD
       VideoQuality.UHD_4K -> Quality.UHD
@@ -258,7 +362,7 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
    * failure here is therefore swallowed rather than surfaced; Play is where a
    * broken camera has to be reported, because that is where it costs footage.
    */
-  fun startPreview(owner: LifecycleOwner) {
+  fun startPreview(owner: LifecycleOwner, mode: CameraMode) {
     val future = ProcessCameraProvider.getInstance(context)
     future.addListener({
       val provider = runCatching { future.get() }.getOrNull() ?: return@addListener
@@ -267,24 +371,35 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
       // Binding a second preview over it would fight for the same surface.
       if (videoCapture != null) return@addListener
       standbyPreview?.let { provider.unbind(it) }
+      standbyFrontAnalysis?.let { provider.unbind(it) }
+      standbyFrontAnalysis = null
       standbyWatermark?.close()
       standbyWatermark = null
       val preview = Preview.Builder().build()
+      // Standby shows the inset too, for the same reason it shows the stamp:
+      // the viewfinder's job is to show what a recording would look like, and
+      // discovering the layout only after pressing Play defeats it.
+      val frontFeed = if (mode == CameraMode.BOTH) FrontCameraFeed() else null
+      val frontAnalysis = frontFeed?.let { newFrontAnalysis(it) }
       // Standby is stamped too: the point of the live viewfinder is to show
       // what a recording would look like, and an unstamped one would move the
       // clock's arrival to the moment Play is pressed.
-      val watermark = WatermarkOverlay(WatermarkOverlay.PREVIEW_TARGETS)
+      val watermark = WatermarkOverlay(WatermarkOverlay.PREVIEW_TARGETS, frontFeed)
       val bound = runCatching {
         val group = UseCaseGroup.Builder()
           .addUseCase(preview)
           .addEffect(watermark.effect)
           .build()
-        provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, group)
+        bind(provider, owner, mode, group, frontAnalysis)
         CameraPreviewBus.subscribe { surfaceProvider -> preview.setSurfaceProvider(surfaceProvider) }
         standbyPreview = preview
+        standbyFrontAnalysis = frontAnalysis
         standbyWatermark = watermark
       }
-      if (bound.isFailure) watermark.close()
+      if (bound.isFailure) {
+        frontAnalysis?.clearAnalyzer()
+        watermark.close()
+      }
     }, mainExecutor)
   }
 
@@ -295,6 +410,13 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
       standbyPreview = null
       if (videoCapture == null) CameraPreviewBus.subscribe(null)
       cameraProvider?.unbind(preview)
+      standbyFrontAnalysis?.let {
+        // Detached before the unbind: an analyzer left attached keeps
+        // converting frames onto a feed nothing will read.
+        it.clearAnalyzer()
+        cameraProvider?.unbind(it)
+      }
+      standbyFrontAnalysis = null
       standbyWatermark?.close()
       standbyWatermark = null
     }
@@ -312,6 +434,12 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
       stopWatchingState()
       CameraPreviewBus.subscribe(null)
       standbyPreview = null
+      // Analyzers off before the unbind, so no conversion is in flight while
+      // the pipeline is being pulled apart.
+      sessionFrontAnalysis?.clearAnalyzer()
+      standbyFrontAnalysis?.clearAnalyzer()
+      sessionFrontAnalysis = null
+      standbyFrontAnalysis = null
       cameraProvider?.unbindAll()
       // After the unbind, never before: an effect closed while its use cases
       // are still bound pulls the surface out from under the pipeline.
@@ -345,7 +473,12 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
   }
 
   private companion object {
+    private const val TAG = "LoopCam/CameraX"
+
     const val BIND_TIMEOUT_SEC = 10L
+
+    /** Roughly what the inset occupies on a 1080p frame. See [newFrontAnalysis]. */
+    val PIP_ANALYSIS_SIZE = Size(640, 360)
 
     /** Largest first — [qualityLadder] slices this both ways. */
     val DESCENDING_QUALITIES = listOf(Quality.UHD, Quality.FHD, Quality.HD, Quality.SD)

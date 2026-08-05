@@ -26,6 +26,10 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
     Events("onStateChange", "onClipFinished", "onSaved", "onStorageWarning", "onError")
 
     OnCreate {
+      // Before anything reads the config: the controller starts on the type's
+      // defaults, and a Play issued before JS has pushed anything — a Lock
+      // Screen tap, a relaunch — must use the camera the user actually chose.
+      self.controller.configure(ConfigStore.load())
       // §7.2 — a temp session that survived a crash is orphaned by definition.
       self.storage.cleanupOrphanedSessions()
       // §6 — needed for the low-battery auto-save-and-stop threshold.
@@ -43,11 +47,19 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
     }
 
     AsyncFunction("configure") { (config: RecorderConfig) in
+      // Persisted as well as applied, so the choice survives a relaunch. The
+      // controller's copy alone would reset to the type's defaults on every
+      // cold start, which is not a settings screen.
+      ConfigStore.save(config)
       self.controller.configure(config)
     }
 
     Function("getConfig") {
       self.controller.currentConfig.asDictionary()
+    }
+
+    Function("getCapabilities") {
+      CameraProbe.capabilities()
     }
 
     AsyncFunction("requestPermissions") { (promise: Promise) in
@@ -159,9 +171,9 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
     }
 
     View(LoopcamRecorderView.self) {
-      Prop("lens") { (view: LoopcamRecorderView, lens: String) in
-        view.setLens(lens)
-      }
+      // No `lens` prop: which camera records is `RecorderConfig.cameraMode`,
+      // owned by the controller. A view prop that also selected it could only
+      // ever be the second, disagreeing source of truth.
       Prop("resizeMode") { (view: LoopcamRecorderView, mode: String) in
         view.setResizeMode(mode)
       }

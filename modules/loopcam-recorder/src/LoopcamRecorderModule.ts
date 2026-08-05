@@ -2,6 +2,7 @@ import { NativeModule, requireNativeModule } from 'expo';
 
 import type {
   BufferStatus,
+  CameraCapabilities,
   LoopcamRecorderEvents,
   RecorderConfig,
   SavedClip,
@@ -14,9 +15,22 @@ import type {
  * state.
  */
 declare class LoopcamRecorderModule extends NativeModule<LoopcamRecorderEvents> {
-  /** Apply clip/buffer durations and quality. Safe to call while recording. */
+  /**
+   * Apply the config and persist it. Safe to call while recording, but
+   * `cameraMode` and `quality` only take effect when the session is next built
+   * — rebinding the capture session mid-recording would drop the clip in
+   * flight. The UI disables both while recording rather than surprising anyone
+   * with a setting that appears to have done nothing.
+   */
   configure(config: RecorderConfig): Promise<void>;
   getConfig(): RecorderConfig;
+
+  /**
+   * What this device's cameras can do. Synchronous because Settings renders
+   * from it on first paint, and cheap because both platforms answer from a
+   * static hardware query, cached after the first call.
+   */
+  getCapabilities(): CameraCapabilities;
 
   /** Camera + mic (+ location, when tagging is on). Resolves to granted. */
   requestPermissions(): Promise<boolean>;

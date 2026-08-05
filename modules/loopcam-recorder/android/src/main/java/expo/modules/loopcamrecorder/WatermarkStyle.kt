@@ -38,4 +38,44 @@ internal object WatermarkStyle {
    */
   const val PLATE_COLOR = 0x8C000000.toInt() // black at 55%
   const val TEXT_COLOR = 0xFFFFFFFF.toInt()
+
+  /**
+   * The front camera's inset picture, in `both` mode.
+   *
+   * Top-right, so it never collides with the timestamp in the bottom-right —
+   * and drawn before it, so a later change to either cannot bury the clock.
+   * Fractions again, and the same inset as the stamp, so the two corners are
+   * visibly symmetrical whatever the buffer's resolution.
+   */
+  object Pip {
+    /** Width, as a fraction of the displayed frame width. */
+    const val WIDTH_FRACTION = 0.30f
+
+    /**
+     * Width over height — portrait, because the recorded frame is portrait and
+     * so is the front camera's natural framing. A landscape inset in a portrait
+     * frame would crop the cabin to a letterbox slot.
+     *
+     * Fixed rather than taken from the source, and the source is centre-cropped
+     * to fill it: a black bar inside an already-small picture reads as a dead
+     * feed rather than as letterboxing.
+     */
+    const val ASPECT = 9f / 16f
+
+    /** Corner radius, as a fraction of the PiP height. */
+    const val CORNER_FRACTION = 0.06f
+
+    /** A hairline, so the inset separates from a bright sky behind it. */
+    const val BORDER_COLOR = 0x66FFFFFF.toInt() // white at 40%
+    const val BORDER_WIDTH_FRACTION = 0.006f
+
+    /**
+     * How stale a front frame may be before it is dropped rather than drawn.
+     *
+     * A frozen inset burned into footage that is timestamped as live is the one
+     * failure here that would make a saved clip actively misleading — better an
+     * empty corner, which reads as "the front camera stopped".
+     */
+    const val MAX_FRAME_AGE_MS = 2_000L
+  }
 }

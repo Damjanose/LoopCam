@@ -88,7 +88,7 @@ export default function RecorderScreen({
   return (
     <View style={styles.root}>
       <StatusBar style="light" />
-      <LoopcamRecorderView style={StyleSheet.absoluteFill} lens="back" resizeMode="cover" />
+      <LoopcamRecorderView style={StyleSheet.absoluteFill} resizeMode="cover" />
 
       <SafeAreaView style={styles.overlay}>
         {/* No panel: the dot and the clock carry the state, so a card behind

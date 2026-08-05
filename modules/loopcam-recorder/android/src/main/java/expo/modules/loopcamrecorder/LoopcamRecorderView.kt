@@ -37,11 +37,6 @@ class LoopcamRecorderView(context: Context, appContext: AppContext) :
     previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
   }
 
-  fun setLens(lens: String) {
-    // TODO(phase-1): switch CameraSelector on the live session; front-facing is
-    // only meaningful once multi-camera (§8, v2) lands.
-  }
-
   fun setResizeMode(mode: String) {
     previewView.scaleType = when (mode) {
       "contain" -> PreviewView.ScaleType.FIT_CENTER

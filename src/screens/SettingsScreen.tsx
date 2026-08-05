@@ -1,13 +1,48 @@
-import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import {
+  CAMERA_MODE_LABELS,
+  CAMERA_MODE_UNAVAILABLE,
+  QUALITY_LADDER,
+  type CameraMode,
+} from '../../modules/loopcam-recorder';
+import { SettingRow } from '../components/SettingRow';
+import { useRecorder } from '../hooks/useRecorder';
 import { colors, legend, radius } from '../theme';
 import { STATUS_BAR_INSET } from './RecorderScreen';
 
+const MODES: CameraMode[] = ['back', 'front', 'both'];
+
 /**
- * Settings. A shell for now — the header and the way back are the whole screen,
- * so the controls can be dropped into the body as they are specified.
+ * Settings.
+ *
+ * Two groups, because two settings genuinely change what gets recorded: which
+ * camera, and at what tier. Both are read from the same `useRecorder` the
+ * recorder screen uses, so a change here is already applied by the time the
+ * back arrow is pressed — there is no Save button and nothing to discard.
  */
 export default function SettingsScreen({ onBack }: { onBack: () => void }) {
+  // No preview: this screen shows no camera feed, and holding the session open
+  // behind it would be battery spent on a picture nobody can see.
+  const { config, capabilities, applyConfig, isRecording } = useRecorder({ preview: false });
+
+  const qualities = capabilities.qualities[config.cameraMode];
+  // Fall back to the full ladder rather than rendering an empty group: a mode
+  // that reports no tiers is a probe that failed, and an empty box tells the
+  // user nothing while a full one still lets them record.
+  const tiers = qualities.length > 0 ? qualities : QUALITY_LADDER;
+
+  /**
+   * Only worth saying when the cap is real. On a phone whose single-camera
+   * ceiling is 720p anyway, "both cameras are limited to 720p" is noise.
+   */
+  const dualCap =
+    config.cameraMode === 'both' &&
+    capabilities.qualities.both.length > 0 &&
+    capabilities.qualities.both.length < capabilities.qualities.back.length
+      ? capabilities.qualities.both[capabilities.qualities.both.length - 1]
+      : null;
+
   return (
     <SafeAreaView style={styles.root}>
       <View style={styles.header}>
@@ -24,9 +59,58 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         </View>
       </View>
 
-      <View style={styles.body}>
-        <Text style={styles.empty}>Nothing to configure yet.</Text>
-      </View>
+      <ScrollView contentContainerStyle={styles.body}>
+        <Text style={styles.section}>Camera</Text>
+        <View style={styles.group} accessibilityRole="radiogroup">
+          {MODES.map((mode, index) => {
+            const supported = capabilities.modes.includes(mode);
+            return (
+              <SettingRow
+                key={mode}
+                first={index === 0}
+                label={CAMERA_MODE_LABELS[mode]}
+                note={supported ? undefined : CAMERA_MODE_UNAVAILABLE[mode]}
+                selected={config.cameraMode === mode}
+                disabled={!supported || isRecording}
+                onPress={() => applyConfig({ cameraMode: mode })}
+              />
+            );
+          })}
+        </View>
+        <Text style={styles.footnote}>
+          {isRecording
+            ? 'Stop recording to change the camera.'
+            : 'Applies the next time you press Play.'}
+        </Text>
+
+        <Text style={styles.section}>Quality</Text>
+        <View style={styles.group} accessibilityRole="radiogroup">
+          {tiers.map((tier, index) => (
+            <SettingRow
+              key={tier}
+              first={index === 0}
+              label={tier}
+              // Android's lowest *named* CameraX tier is SD (480p).
+              // `Quality.LOWEST` resolves to 176x144 on some hardware, which is
+              // unusable as evidence, so 360p maps to SD and says so rather
+              // than gambling the buffer on whatever "lowest" means here.
+              note={
+                tier === '360p' && Platform.OS === 'android'
+                  ? 'Records at 480p — Android has no lower tier.'
+                  : undefined
+              }
+              selected={config.quality === tier}
+              disabled={isRecording}
+              onPress={() => applyConfig({ quality: tier })}
+            />
+          ))}
+        </View>
+        {dualCap ? (
+          <Text style={styles.footnote}>
+            Both cameras are limited to {dualCap} on this phone.
+          </Text>
+        ) : null}
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -54,7 +138,17 @@ const styles = StyleSheet.create({
   headerText: { gap: 2 },
   eyebrow: { ...legend, color: colors.textFaint },
   title: { color: colors.text, fontSize: 30, fontWeight: '700', letterSpacing: -0.8 },
-  body: { flex: 1, paddingHorizontal: 16 },
-  empty: { color: colors.textDim, fontSize: 15, textAlign: 'center', marginTop: 96 },
+
+  body: { paddingHorizontal: 16, paddingBottom: 40 },
+  section: { ...legend, color: colors.textFaint, marginTop: 12, marginBottom: 10 },
+  /** Opaque panel, not glass: there is no camera feed behind this screen. */
+  group: {
+    borderRadius: radius.md,
+    backgroundColor: colors.panel,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.hairline,
+    overflow: 'hidden',
+  },
+  footnote: { color: colors.textDim, fontSize: 12, lineHeight: 17, marginTop: 10 },
   pressed: { opacity: 0.55 },
 });

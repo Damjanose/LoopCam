@@ -1,8 +1,10 @@
 import { registerWebModule, NativeModule } from 'expo';
 
+import { FALLBACK_CAPABILITIES } from './capabilities';
 import { DEFAULT_CONFIG, maxClipsFor } from './config';
 import type {
   BufferStatus,
+  CameraCapabilities,
   LoopcamRecorderEvents,
   RecorderConfig,
   SavedClip,
@@ -26,6 +28,12 @@ class LoopcamRecorderModule extends NativeModule<LoopcamRecorderEvents> {
 
   getConfig(): RecorderConfig {
     return this.config;
+  }
+
+  // Back-only, like the stubs above: web renders the settings shell so the
+  // rows can be laid out, and there is no capture session to probe.
+  getCapabilities(): CameraCapabilities {
+    return FALLBACK_CAPABILITIES;
   }
 
   async requestPermissions(): Promise<boolean> {

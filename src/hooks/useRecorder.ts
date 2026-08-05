@@ -3,7 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   LoopcamRecorder,
   maxClipsFor,
+  resolveQuality,
   type BufferStatus,
+  type CameraCapabilities,
   type RecorderConfig,
   type SavedClip,
 } from '../../modules/loopcam-recorder';
@@ -36,13 +38,15 @@ const ANCHOR_DRIFT_MS = 2000;
  * The native side owns the state machine; this hook only mirrors what it emits,
  * so the buttons can never disagree with what is actually on disk.
  */
-export function useRecorder() {
+export function useRecorder({ preview = true }: { preview?: boolean } = {}) {
   // Seeded from native, never from the defaults: the engine outlives this hook
   // (App.tsx unmounts the recorder screen to browse saved clips) and only emits
   // at clip boundaries, so starting from a hardcoded idle status would show
   // Standby, an armed Play button and a 00:00 clock over a live recording until
   // the next boundary landed.
   const [config, setConfig] = useState<RecorderConfig>(() => LoopcamRecorder.getConfig());
+  // Hardware, so it cannot change while the app is running. Read once.
+  const [capabilities] = useState<CameraCapabilities>(() => LoopcamRecorder.getCapabilities());
   const [snapshot, setSnapshot] = useState<Snapshot>(() =>
     snapshotOf(LoopcamRecorder.getStatus()),
   );
@@ -127,7 +131,14 @@ export function useRecorder() {
 
   const applyConfig = useCallback(
     (patch: Partial<RecorderConfig>) => {
-      const next = { ...config, ...patch };
+      const merged = { ...config, ...patch };
+      // Switching to a mode that cannot reach the selected tier clamps down
+      // rather than failing: no device runs both cameras at 4K, and a mode
+      // change should cost quality at worst, never the ability to record.
+      const next: RecorderConfig = {
+        ...merged,
+        quality: resolveQuality(merged.quality, merged.cameraMode, capabilities),
+      };
       setConfig(next);
       // Capacity only — the buffer's age is unchanged, so the arrival timestamp
       // must survive or the extrapolated readouts would jump back.
@@ -137,7 +148,7 @@ export function useRecorder() {
       }));
       void LoopcamRecorder.configure(next);
     },
-    [config],
+    [capabilities, config],
   );
 
   const isRecording = status.state === 'recording' || status.state === 'saving';
@@ -159,14 +170,19 @@ export function useRecorder() {
    * so browsing the gallery does not hold the camera open for a view that is no
    * longer mounted — while a *recording* session, which outlives this screen by
    * design (§3.1), is left strictly alone.
+   *
+   * Screens that only read the config — Settings — pass `preview: false`. They
+   * are the same hook because they need the same config and the same
+   * `isRecording`, but a settings screen holding the camera open is battery
+   * spent on a picture nobody can see.
    */
   useEffect(() => {
-    if (isRecording || !LoopcamRecorder.hasPermissions()) return;
+    if (!preview || isRecording || !LoopcamRecorder.hasPermissions()) return;
     void LoopcamRecorder.startPreview();
     return () => {
       void LoopcamRecorder.stopPreview();
     };
-  }, [isRecording]);
+  }, [isRecording, preview]);
 
   /**
    * Native only emits on real events — a clip boundary, a state change — which
@@ -234,6 +250,7 @@ export function useRecorder() {
 
   return {
     config,
+    capabilities,
     applyConfig,
     status: liveStatus,
     isRecording,

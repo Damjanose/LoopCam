@@ -28,6 +28,8 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
 
   private val storage by lazy { StorageManager(context) }
   private val cameraRecorder by lazy { CameraXSegmentRecorder(context) }
+  private val configStore by lazy { ConfigStore(context) }
+  private val cameraProbe by lazy { CameraProbe(context) }
 
   override fun definition() = ModuleDefinition {
     Name("LoopcamRecorder")
@@ -39,6 +41,9 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
       // §7.2 — a temp session that survived a process death is orphaned by
       // definition; sweep before anything else touches the buffer.
       storage.cleanupOrphanedSessions()
+      // Kicked off here so the answer is ready by the time the first render
+      // asks for it; the probe itself runs on its own thread.
+      cameraProbe
     }
 
     OnDestroy {
@@ -52,11 +57,24 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
     }
 
     AsyncFunction("configure") { config: RecorderConfig ->
+      // Persisted as well as applied. The service can outlive the JS side
+      // (§5.1), so the stored copy is what a cold start reads — a config that
+      // only lived in the controller would reset on every launch.
+      configStore.save(config)
       requireController().configure(config)
     }
 
+    /**
+     * The live config if there is one, else whatever was last saved. Not the
+     * type's defaults: those would tell a freshly-launched app it is set to the
+     * back camera at 1080p regardless of what the user actually chose.
+     */
     Function("getConfig") {
-      (controller?.currentConfig() ?: RecorderConfig()).toMap()
+      (controller?.currentConfig() ?: configStore.load()).toMap()
+    }
+
+    Function("getCapabilities") {
+      cameraProbe.capabilities()
     }
 
     AsyncFunction("requestPermissions") { promise: Promise ->
@@ -104,7 +122,11 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
     AsyncFunction("startPreview") {
       val owner = appContext.currentActivity as? LifecycleOwner
         ?: throw Exceptions.MissingActivity()
-      cameraRecorder.startPreview(owner)
+      // The stored mode, so the standby picture is laid out the way a recording
+      // would be — including the front-camera inset — rather than only
+      // revealing the layout once Play is pressed.
+      val mode = (controller?.currentConfig() ?: configStore.load()).camera
+      cameraRecorder.startPreview(owner, mode)
     }
 
     AsyncFunction("stopPreview") {
@@ -193,9 +215,9 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
     }
 
     View(LoopcamRecorderView::class) {
-      Prop("lens") { view: LoopcamRecorderView, lens: String ->
-        view.setLens(lens)
-      }
+      // No `lens` prop: which camera records is `RecorderConfig.cameraMode`,
+      // owned by the controller. A view prop that also selected it could only
+      // ever be the second, disagreeing source of truth.
       Prop("resizeMode") { view: LoopcamRecorderView, mode: String ->
         view.setResizeMode(mode)
       }
@@ -278,11 +300,17 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
       recorder = cameraRecorder,
       merger = ClipMerger(storage),
       listener = this,
-    ).also { controller = it }
+    ).also {
+      // Seeded from disk, not from the type's defaults: a Play issued before JS
+      // has pushed anything — the notification's action, or a restart — must
+      // record with the camera and tier the user actually chose.
+      it.configure(configStore.load())
+      controller = it
+    }
   }
 
   private fun idleStatus(): BufferStatus {
-    val config = controller?.currentConfig() ?: RecorderConfig()
+    val config = controller?.currentConfig() ?: configStore.load()
     return BufferStatus(
       state = RecorderState.IDLE,
       clipCount = 0,

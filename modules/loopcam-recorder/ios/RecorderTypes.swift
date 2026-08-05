@@ -9,18 +9,45 @@ enum RecorderState: String {
   case stopping
 }
 
-enum VideoQuality: String {
+enum VideoQuality: String, CaseIterable {
+  case sd360 = "360p"
+  case sd480 = "480p"
   case hd720 = "720p"
   case hd1080 = "1080p"
   case uhd4k = "4k"
 
   var bitrate: Int {
     switch self {
+    case .sd360: return 800_000
+    case .sd480: return 1_200_000
     case .hd720: return 2_500_000
     case .hd1080: return 5_000_000
     case .uhd4k: return 20_000_000
     }
   }
+
+  /// Target height. Multi-cam cannot use session presets, so formats are picked
+  /// against this directly; the single-camera path still uses presets.
+  var targetHeight: Int {
+    switch self {
+    case .sd360: return 360
+    case .sd480: return 480
+    case .hd720: return 720
+    case .hd1080: return 1080
+    case .uhd4k: return 2160
+    }
+  }
+}
+
+/// Which camera(s) feed the buffer. Mirrors `CameraMode` on the JS side.
+///
+/// `both` is a composite, not two recordings: the front camera is drawn into
+/// the top-right of the back camera's frame before it reaches the writer, so
+/// one file comes out and every type downstream is untouched by the choice.
+enum CameraMode: String, CaseIterable {
+  case back
+  case front
+  case both
 }
 
 /// §2.1 — the two independent settings, plus the v1 feature toggles.
@@ -28,6 +55,7 @@ struct RecorderConfig: Record {
   @Field var clipDurationSec: Double = 10
   @Field var bufferDurationSec: Double = 120
   @Field var quality: String = "1080p"
+  @Field var cameraMode: String = "back"
   @Field var audioEnabled: Bool = true
   @Field var locationTaggingEnabled: Bool = true
   @Field var impactDetectionEnabled: Bool = true
@@ -42,11 +70,17 @@ struct RecorderConfig: Record {
     VideoQuality(rawValue: quality) ?? .hd1080
   }
 
+  /// Anything unrecognised — a value written by a newer build — falls back.
+  var camera: CameraMode {
+    CameraMode(rawValue: cameraMode) ?? .back
+  }
+
   func asDictionary() -> [String: Any] {
     [
       "clipDurationSec": clipDurationSec,
       "bufferDurationSec": bufferDurationSec,
       "quality": quality,
+      "cameraMode": cameraMode,
       "audioEnabled": audioEnabled,
       "locationTaggingEnabled": locationTaggingEnabled,
       "impactDetectionEnabled": impactDetectionEnabled,

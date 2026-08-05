@@ -13,6 +13,14 @@ enum class RecorderState(val jsValue: String) {
 }
 
 enum class VideoQuality(val jsValue: String, val bitrateBps: Int) {
+  /**
+   * CameraX's lowest *named* tier is SD (480p), so this records at 480p. The
+   * alternative, `Quality.LOWEST`, resolves to whatever the device calls lowest
+   * — 176x144 on some hardware, which is worthless as evidence. Settings says
+   * so out loud rather than letting the buffer fill with a surprise.
+   */
+  SD_360("360p", 800_000),
+  SD_480("480p", 1_200_000),
   HD_720("720p", 2_500_000),
   HD_1080("1080p", 5_000_000),
   UHD_4K("4k", 20_000_000);
@@ -23,11 +31,32 @@ enum class VideoQuality(val jsValue: String, val bitrateBps: Int) {
   }
 }
 
+/**
+ * Which camera(s) feed the buffer. Mirrors `CameraMode` on the JS side.
+ *
+ * [BOTH] is a composite, not two recordings: the front camera is drawn into the
+ * top-right of the back camera's frame before it reaches the encoder, so one
+ * file comes out and every type downstream — the ring buffer, the merge, the
+ * gallery — is untouched by the choice.
+ */
+enum class CameraMode(val jsValue: String) {
+  BACK("back"),
+  FRONT("front"),
+  BOTH("both");
+
+  companion object {
+    /** Anything unrecognised — a value written by a newer build — falls back. */
+    fun from(value: String): CameraMode =
+      entries.firstOrNull { it.jsValue == value } ?: BACK
+  }
+}
+
 /** §2.1 — the two independent settings, plus the v1 feature toggles. */
 class RecorderConfig : Record {
   @Field var clipDurationSec: Double = 10.0
   @Field var bufferDurationSec: Double = 120.0
   @Field var quality: String = "1080p"
+  @Field var cameraMode: String = "back"
   @Field var audioEnabled: Boolean = true
   @Field var locationTaggingEnabled: Boolean = true
   @Field var impactDetectionEnabled: Boolean = true
@@ -39,10 +68,13 @@ class RecorderConfig : Record {
 
   val videoQuality: VideoQuality get() = VideoQuality.from(quality)
 
+  val camera: CameraMode get() = CameraMode.from(cameraMode)
+
   fun toMap(): Map<String, Any> = mapOf(
     "clipDurationSec" to clipDurationSec,
     "bufferDurationSec" to bufferDurationSec,
     "quality" to quality,
+    "cameraMode" to cameraMode,
     "audioEnabled" to audioEnabled,
     "locationTaggingEnabled" to locationTaggingEnabled,
     "impactDetectionEnabled" to impactDetectionEnabled,
