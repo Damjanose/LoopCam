@@ -32,9 +32,13 @@ import java.util.Locale
  * biggest battery lever in §6. One GPU composite per frame is the cheaper end of
  * that trade by a wide margin.
  *
- * [OverlayEffect] can target the preview and the video stream at once, so the
- * viewfinder shows the very thing the file will contain instead of an
- * approximation of it.
+ * [OverlayEffect] can target the preview and the video stream at once — used
+ * for the inset, which both should show. The clock plate does not: it is only
+ * ever composited into the video stream (see [showStamp]), so the file always
+ * carries it and no live viewfinder ever does. A recording session therefore
+ * runs two instances of this class against the same [UseCaseGroup] — one
+ * targeting the encoder with the stamp on, one targeting the screen with it
+ * off — rather than one instance targeting both.
  *
  * Everything here runs on [thread] — CameraX calls the draw listener there and
  * nowhere else, which is why the caches below need no synchronisation.
@@ -43,6 +47,15 @@ internal class WatermarkOverlay(
   targets: Int,
   /** The front camera in `both` mode; null in the single-camera modes. */
   private val pip: FrontCameraFeed? = null,
+  /**
+   * Whether this instance draws the clock plate at all.
+   *
+   * The recorded file always carries it; the live viewfinder is not made of the
+   * same pixels a court would later see, and burning evidence into a screen the
+   * driver is glancing at while moving buys nothing. `false` here still draws
+   * the front-camera inset — only the stamp is conditional.
+   */
+  private val showStamp: Boolean = true,
 ) : AutoCloseable {
 
   private val thread = HandlerThread("loopcam-watermark").apply { start() }
@@ -81,6 +94,7 @@ internal class WatermarkOverlay(
   /** The text is redrawn per frame but only re-*formatted* when the second turns. */
   private var cachedSecond = Long.MIN_VALUE
   private var cachedText = ""
+  private var debugFrames = 0
 
   init {
     effect.setOnDrawListener { frame ->
@@ -92,6 +106,13 @@ internal class WatermarkOverlay(
 
   private fun draw(frame: Frame) {
     val canvas = frame.overlayCanvas
+    if (debugFrames < 3) {
+      debugFrames++
+      android.util.Log.d(
+        "LoopCam/Overlay",
+        "canvas=${canvas.width}x${canvas.height} crop=${frame.cropRect} rot=${frame.rotationDegrees}",
+      )
+    }
     // The overlay surface is reused between frames, so last frame's text is
     // still on it.
     canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
@@ -113,7 +134,7 @@ internal class WatermarkOverlay(
     // corners — but fixing the order means a later change to either one's
     // geometry cannot end up burying the timestamp.
     drawPip(canvas, displayWidth, displayHeight)
-    drawStamp(canvas, frame.timestampNanos, displayWidth, displayHeight)
+    if (showStamp) drawStamp(canvas, frame.timestampNanos, displayWidth, displayHeight)
     canvas.restore()
   }
 
@@ -199,7 +220,7 @@ internal class WatermarkOverlay(
   private fun drawStamp(canvas: Canvas, frameTimestampNanos: Long, width: Float, height: Float) {
     val text = textFor(frameTimestampNanos)
 
-    val textSize = height * WatermarkStyle.TEXT_HEIGHT_FRACTION
+    val textSize = minOf(width, height) * WatermarkStyle.TEXT_HEIGHT_FRACTION
     textPaint.textSize = textSize
     val metrics = textPaint.fontMetrics
     val padX = textSize * WatermarkStyle.PAD_X_FRACTION
@@ -248,8 +269,12 @@ internal class WatermarkOverlay(
   }
 
   companion object {
-    /** Preview and file get the same treatment — the viewfinder is WYSIWYG. */
-    const val SESSION_TARGETS = CameraEffect.PREVIEW or CameraEffect.VIDEO_CAPTURE
+    /**
+     * The encoder alone. The viewfinder is no longer WYSIWYG for the stamp —
+     * see [showStamp] — so the session now runs two effects instead of one:
+     * this targets the file, [PREVIEW_TARGETS] targets the screen.
+     */
+    const val VIDEO_TARGETS = CameraEffect.VIDEO_CAPTURE
 
     /** Standby has no video stream to target. */
     const val PREVIEW_TARGETS = CameraEffect.PREVIEW

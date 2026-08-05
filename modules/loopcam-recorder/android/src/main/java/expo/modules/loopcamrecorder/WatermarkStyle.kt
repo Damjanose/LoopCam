@@ -19,7 +19,15 @@ internal object WatermarkStyle {
    */
   const val PATTERN = "dd/MM/yyyy HH:mm:ss"
 
-  /** Text height, as a fraction of the displayed frame height. */
+  /**
+   * Text height, as a fraction of the displayed frame's *short* edge — the same
+   * edge [INSET_FRACTION] is measured against.
+   *
+   * Not the height. The stamp is a single wide line running along the frame's
+   * width, and the app records portrait: measured against the long edge, the
+   * plate came out around three quarters of the frame wide and ran off the
+   * side of the picture.
+   */
   const val TEXT_HEIGHT_FRACTION = 0.035f
 
   /** Inset from the frame edges, as a fraction of the displayed short edge. */

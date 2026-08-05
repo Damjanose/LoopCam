@@ -56,7 +56,8 @@ final class WatermarkRenderer {
     // in every player, which is the whole trap this file exists to avoid.
     let displaySize = CGSize(width: pixelSize.height, height: pixelSize.width)
 
-    let textHeight = displaySize.height * WatermarkStyle.textHeightFraction
+    let textHeight =
+      min(displaySize.width, displaySize.height) * WatermarkStyle.textHeightFraction
     let font = UIFont.monospacedDigitSystemFont(ofSize: textHeight, weight: .medium)
     let attributes: [NSAttributedString.Key: Any] = [
       .font: font,

@@ -1,5 +1,4 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
 import {
   Pressable,
   SafeAreaView,
@@ -24,29 +23,6 @@ const formatDuration = (seconds: number) => {
   const total = Math.floor(seconds);
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 };
-
-const pad = (n: number) => String(n).padStart(2, '0');
-
-/** `dd/mm/yyyy hh:mm:ss` — fixed order, so it is read the same way every glance. */
-const formatStamp = (d: Date) =>
-  `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ` +
-  `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-
-/**
- * The wall clock, re-rendered on the second it changes rather than on a free
- * 1 s interval: an interval started at an arbitrary phase drifts against the
- * system clock and visibly skips a second every so often.
- */
-function useWallClock() {
-  const [now, setNow] = useState(() => new Date());
-
-  useEffect(() => {
-    const id = setTimeout(() => setNow(new Date()), 1000 - (now.getTime() % 1000));
-    return () => clearTimeout(id);
-  }, [now]);
-
-  return formatStamp(now);
-}
 
 /**
  * Shutter geometry, from the stock camera apps: an outer ring that never moves
@@ -82,8 +58,6 @@ export default function RecorderScreen({
     save,
   } =
     useRecorder();
-
-  const stamp = useWallClock();
 
   return (
     <View style={styles.root}>
@@ -194,11 +168,6 @@ export default function RecorderScreen({
               <View style={styles.slot} />
             )}
           </View>
-
-          {/* Last line on the screen, in the bottom-right corner — the same
-              corner the watermark burns into the footage, so what is on screen
-              matches what a saved clip will show. */}
-          <Text style={styles.stamp}>{stamp}</Text>
         </View>
       </SafeAreaView>
     </View>
@@ -271,15 +240,6 @@ const styles = StyleSheet.create({
   },
 
   footer: { paddingHorizontal: 16, paddingBottom: 24, gap: 12 },
-  /** Tabular figures: the seconds tick without the whole line reflowing. */
-  stamp: {
-    alignSelf: 'flex-end',
-    color: colors.textDim,
-    fontFamily: mono,
-    fontSize: 13,
-    letterSpacing: 0.4,
-    fontVariant: ['tabular-nums'],
-  },
   toast: {
     alignSelf: 'center',
     paddingVertical: 8,

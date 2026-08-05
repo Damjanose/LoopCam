@@ -3,7 +3,9 @@ package expo.modules.loopcamrecorder
 import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
+import android.util.Rational
 import android.util.Size
+import android.view.Surface
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraState
@@ -11,6 +13,7 @@ import androidx.camera.core.ConcurrentCamera
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCaseGroup
+import androidx.camera.core.ViewPort
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -70,12 +73,15 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
   private var standbyPreview: Preview? = null
 
   /**
-   * The burned-in clock, one instance per binding: the session's targets the
-   * encoder as well as the screen, standby's only the screen. Closed with the
-   * binding it belongs to, because an effect outliving its use cases holds a
-   * GPU surface and a thread for a picture nobody is watching.
+   * The burned-in clock. The stamp is not shown on any live viewfinder — only
+   * the encoder's copy carries it — so a live session runs two overlays: one on
+   * the encoder ([sessionVideoWatermark], stamped) and one on the screen
+   * ([sessionPreviewWatermark], not). Standby has only the screen. Closed with
+   * the binding it belongs to, because an effect outliving its use cases holds
+   * a GPU surface and a thread for a picture nobody is watching.
    */
-  private var sessionWatermark: WatermarkOverlay? = null
+  private var sessionVideoWatermark: WatermarkOverlay? = null
+  private var sessionPreviewWatermark: WatermarkOverlay? = null
   private var standbyWatermark: WatermarkOverlay? = null
 
   /**
@@ -129,7 +135,12 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     // analysis stream feeding the overlay rather than a second recording.
     val frontFeed = if (mode == CameraMode.BOTH) FrontCameraFeed() else null
     val frontAnalysis = frontFeed?.let { newFrontAnalysis(it) }
-    val watermark = WatermarkOverlay(WatermarkOverlay.SESSION_TARGETS, frontFeed)
+    // Two overlays, not one: the stamp belongs on the file, not on the screen a
+    // driver is glancing at while moving. Both draw the same inset off the same
+    // [frontFeed], so the corner still matches between the two.
+    val videoWatermark = WatermarkOverlay(WatermarkOverlay.VIDEO_TARGETS, frontFeed, showStamp = true)
+    val previewWatermark =
+      WatermarkOverlay(WatermarkOverlay.PREVIEW_TARGETS, frontFeed, showStamp = false)
 
     val latch = CountDownLatch(1)
     var failure: Throwable? = null
@@ -144,13 +155,15 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
         standbyWatermark?.close()
         standbyWatermark = null
         // One group rather than loose use cases, because an effect can only be
-        // attached to a group. The timestamp and the inset therefore reach the
-        // encoder and the screen from the same composite — what the driver sees
-        // framed is what the file will show.
+        // attached to a group. The inset reaches the encoder and the screen from
+        // the same composite, so the corner is WYSIWYG; the stamp only reaches
+        // the encoder, via its own effect on the same group.
         val group = UseCaseGroup.Builder()
+          .setViewPort(recordingViewPort())
           .addUseCase(preview)
           .addUseCase(capture)
-          .addEffect(watermark.effect)
+          .addEffect(videoWatermark.effect)
+          .addEffect(previewWatermark.effect)
           .build()
         val camera = bind(provider, owner, mode, group, frontAnalysis)
         // Whichever preview view is mounted now — or mounts later — gets this
@@ -187,17 +200,20 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
 
     if (!latch.await(BIND_TIMEOUT_SEC, TimeUnit.SECONDS)) {
       mainExecutor.execute { stopWatchingState() }
-      watermark.close()
+      videoWatermark.close()
+      previewWatermark.close()
       throw IllegalStateException("Timed out waiting for the camera to open")
     }
     failure?.let {
-      watermark.close()
+      videoWatermark.close()
+      previewWatermark.close()
       throw IllegalStateException(it.message ?: "Could not open the camera", it)
     }
 
     videoCapture = capture
     previewUseCase = preview
-    sessionWatermark = watermark
+    sessionVideoWatermark = videoWatermark
+    sessionPreviewWatermark = previewWatermark
     sessionFrontAnalysis = frontAnalysis
   }
 
@@ -237,6 +253,32 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     }
     return provider.bindToLifecycle(owner, selectorFor(mode), group)
   }
+
+  /**
+   * The one crop rect every use case in the group shares.
+   *
+   * Load-bearing, not a nicety. Without a view port each use case crops the
+   * sensor buffer independently: the overlay effect is handed the *whole*
+   * buffer and told via `Frame.cropRect` that all of it is visible, while
+   * VideoCapture quietly crops it to the recording aspect afterwards. On a
+   * camera delivering 4:3 (1280x960 on the emulator, and plenty of real
+   * hardware) that is 12.5% shaved off each side *after* the timestamp has been
+   * positioned against the full width — so the plate was laid out to end 2.5%
+   * from the right edge of a frame 25% wider than the one that reached the
+   * file, and four characters of the clock were cut off the side of every
+   * recording.
+   *
+   * With a view port, `Frame.cropRect` describes what will actually be encoded,
+   * and the preview is cropped to match — which is what makes the viewfinder
+   * show the framing the file will have, rather than a wider one.
+   *
+   * The ratio is the app's own: portrait-locked 16:9. FILL_CENTER because the
+   * alternative letterboxes the road to preserve sensor area nobody asked for.
+   */
+  private fun recordingViewPort(): ViewPort =
+    ViewPort.Builder(Rational(9, 16), Surface.ROTATION_0)
+      .setScaleType(ViewPort.FILL_CENTER)
+      .build()
 
   private fun selectorFor(mode: CameraMode): CameraSelector = when (mode) {
     // `both` records *into* the back camera's frame, so the back camera is the
@@ -376,17 +418,18 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
       standbyWatermark?.close()
       standbyWatermark = null
       val preview = Preview.Builder().build()
-      // Standby shows the inset too, for the same reason it shows the stamp:
-      // the viewfinder's job is to show what a recording would look like, and
-      // discovering the layout only after pressing Play defeats it.
+      // Standby shows the inset, for the same reason the live session's screen
+      // does: the viewfinder's job is to show the framing a recording would
+      // have, and discovering the layout only after pressing Play defeats it.
+      // The stamp itself is never shown on a viewfinder — see [showStamp] — so
+      // standby does not draw it either.
       val frontFeed = if (mode == CameraMode.BOTH) FrontCameraFeed() else null
       val frontAnalysis = frontFeed?.let { newFrontAnalysis(it) }
-      // Standby is stamped too: the point of the live viewfinder is to show
-      // what a recording would look like, and an unstamped one would move the
-      // clock's arrival to the moment Play is pressed.
-      val watermark = WatermarkOverlay(WatermarkOverlay.PREVIEW_TARGETS, frontFeed)
+      val watermark =
+        WatermarkOverlay(WatermarkOverlay.PREVIEW_TARGETS, frontFeed, showStamp = false)
       val bound = runCatching {
         val group = UseCaseGroup.Builder()
+          .setViewPort(recordingViewPort())
           .addUseCase(preview)
           .addEffect(watermark.effect)
           .build()
@@ -443,8 +486,10 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
       cameraProvider?.unbindAll()
       // After the unbind, never before: an effect closed while its use cases
       // are still bound pulls the surface out from under the pipeline.
-      sessionWatermark?.close()
-      sessionWatermark = null
+      sessionVideoWatermark?.close()
+      sessionVideoWatermark = null
+      sessionPreviewWatermark?.close()
+      sessionPreviewWatermark = null
       standbyWatermark?.close()
       standbyWatermark = null
     }

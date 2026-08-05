@@ -50,7 +50,11 @@ flag; if a toggle is wanted later it is one boolean and one branch.
   dispute.
 - Bottom-right of the frame as displayed, inset by 2.5% of the frame's short
   edge on each side.
-- Monospace, ~3.5% of the displayed frame height, white, drawn over a
+- Monospace, ~3.5% of the displayed frame's *short* edge — the same edge the
+  inset is measured against. (Was "frame height" when this was written, which
+  is only right in landscape: the app records portrait, and against the long
+  edge the plate came out around three quarters of the frame wide and ran off
+  the side of the picture.) White, drawn over a
   black-at-55%-alpha rounded plate. The plate is what makes it legible against a
   bright road; a shadow alone is not enough on overexposed asphalt.
 - Both platforms define these numbers as constants in one file each
