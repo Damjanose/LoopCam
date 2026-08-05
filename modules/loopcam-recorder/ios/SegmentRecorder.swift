@@ -291,18 +291,18 @@ final class AVSegmentRecorder: NSObject, SegmentRecorder {
       throw RecorderError.cameraUnavailable("the capture session rejected the video output")
     }
     session.addOutput(videoOutput)
-    // Front-facing footage is *not* mirrored. A mirrored selfie is the
-    // phone-camera convention, but this is evidence — text in the cabin has to
-    // read the right way round.
+    // Front-facing footage is written mirrored, so the file matches the
+    // viewfinder it was framed against; the back camera never is.
     //
-    // `automaticallyAdjustsVideoMirroring` must be cleared first: setting
-    // `isVideoMirrored` while it is on raises an exception rather than
-    // returning an error.
+    // Set explicitly rather than left to `automaticallyAdjustsVideoMirroring`,
+    // which mirrors the *preview* convention onto a data output only sometimes.
+    // Clearing it first is mandatory: assigning `isVideoMirrored` while it is
+    // on raises an exception rather than returning an error.
     if let connection = videoOutput.connection(with: .video),
       connection.isVideoMirroringSupported
     {
       connection.automaticallyAdjustsVideoMirroring = false
-      connection.isVideoMirrored = false
+      connection.isVideoMirrored = position == .front
     }
   }
 
@@ -374,10 +374,11 @@ final class AVSegmentRecorder: NSObject, SegmentRecorder {
     guard session.canAddConnection(connection) else {
       throw RecorderError.cameraUnavailable("the session rejected a video connection")
     }
-    // Unmirrored, for the same evidentiary reason as the single-camera path.
+    // Same rule as the single-camera path: the front stream is mirrored, and
+    // here that reaches the file through the corner inset the writer composites.
     if connection.isVideoMirroringSupported {
       connection.automaticallyAdjustsVideoMirroring = false
-      connection.isVideoMirrored = false
+      connection.isVideoMirrored = isFront
     }
     session.addConnection(connection)
     return port

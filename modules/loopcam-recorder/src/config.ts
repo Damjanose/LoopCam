@@ -44,6 +44,37 @@ export const DEFAULT_CONFIG: RecorderConfig = {
   autoStopBatteryPercent: 15,
 };
 
+/**
+ * The loop lengths offered in Settings.
+ *
+ * Coarse at the top end on purpose: the difference between 30 s and a minute of
+ * retained footage decides whether an incident survives the fumble for the Save
+ * button, while the difference between 5 and 7 minutes decides nothing. Ends at
+ * ten minutes because that is already 1.5 GB at 4K.
+ */
+export const BUFFER_DURATION_OPTIONS: readonly { sec: number; label: string }[] = [
+  { sec: 30, label: '30 seconds' },
+  { sec: 60, label: '1 minute' },
+  { sec: 120, label: '2 minutes' },
+  { sec: 300, label: '5 minutes' },
+  { sec: 600, label: '10 minutes' },
+];
+
+/**
+ * The offered length closest to `sec`.
+ *
+ * Settings marks the selected row by comparing against this rather than against
+ * the stored value directly. Every config written to date holds one of the five,
+ * but an exact match would render a group with *nothing* selected the moment
+ * that stops being true — an older build's value, a preset, a future option
+ * removed from the list — and a radio group with no dot reads as broken.
+ */
+export function nearestBufferDuration(sec: number): number {
+  return BUFFER_DURATION_OPTIONS.reduce((best, option) =>
+    Math.abs(option.sec - sec) < Math.abs(best.sec - sec) ? option : best
+  ).sec;
+}
+
 /** §2.2 example presets. */
 export const PRESETS = {
   quickClip: { clipDurationSec: 5, bufferDurationSec: 30 },

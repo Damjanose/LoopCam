@@ -2,9 +2,12 @@ import { useMemo } from 'react';
 import { Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import {
+  BUFFER_DURATION_OPTIONS,
   CAMERA_MODE_LABELS,
   CAMERA_MODE_UNAVAILABLE,
+  estimatedBufferBytes,
   LoopcamRecorder,
+  nearestBufferDuration,
   QUALITY_LADDER,
   type CameraMode,
   type LocationStatus,
@@ -21,6 +24,21 @@ const SPEED_UNITS: { value: SpeedUnit; label: string }[] = [
   { value: 'kmh', label: 'km/h' },
   { value: 'mph', label: 'mph' },
 ];
+
+/**
+ * Rough disk cost of a loop length, for the note under each row.
+ *
+ * Deliberately coarse — the number comes off an average-bitrate estimate, so a
+ * figure like "1.47 GB" would claim a precision the projection does not have,
+ * and the only question it needs to answer is whether the phone has room for
+ * that choice. Rounding to tens of MB stops above 100 MB, or half a minute at
+ * 360p — genuinely ~3 MB — would round to nothing and read as a broken readout.
+ */
+const formatBufferSize = (bytes: number) => {
+  const mb = bytes / 1_000_000;
+  if (mb >= 1000) return `~${(mb / 1000).toFixed(1)} GB`;
+  return `~${mb >= 100 ? Math.round(mb / 10) * 10 : Math.max(1, Math.round(mb))} MB`;
+};
 
 /**
  * Why the speed field is blank, in the driver's words.
@@ -65,6 +83,8 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     capabilities.qualities.both.length < capabilities.qualities.back.length
       ? capabilities.qualities.both[capabilities.qualities.both.length - 1]
       : null;
+
+  const selectedBuffer = nearestBufferDuration(config.bufferDurationSec);
 
   /**
    * Re-read whenever the toggle changes, which is the only moment on this
@@ -143,6 +163,31 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             Both cameras are limited to {dualCap} on this phone.
           </Text>
         ) : null}
+
+        <Text style={styles.section}>Loop length</Text>
+        <View style={styles.group} accessibilityRole="radiogroup">
+          {BUFFER_DURATION_OPTIONS.map(({ sec, label }, index) => (
+            <SettingRow
+              key={sec}
+              first={index === 0}
+              label={label}
+              // Priced at the tier currently selected above, so switching from
+              // 1080p to 4K visibly re-prices every row rather than leaving a
+              // stale estimate that under-reports by a factor of four.
+              note={formatBufferSize(estimatedBufferBytes({ ...config, bufferDurationSec: sec }))}
+              selected={selectedBuffer === sec}
+              onPress={() => applyConfig({ bufferDurationSec: sec })}
+            />
+          ))}
+        </View>
+        {/* Not disabled while recording, unlike camera and quality: resizing the
+            ring is not a capture-session rebuild — native re-caps the buffer in
+            place and deletes whatever no longer fits. */}
+        <Text style={styles.footnote}>
+          How much of the road behind you is kept. Save writes out the whole loop, so this is also
+          how long a saved clip is. Applies immediately — shortening it drops footage older than the
+          new window right away.
+        </Text>
 
         <Text style={styles.section}>GPS speed</Text>
         <View style={styles.group}>

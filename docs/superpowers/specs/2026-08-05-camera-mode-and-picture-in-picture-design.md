@@ -192,10 +192,14 @@ clock.
 The front image is scaled to fill the PiP rect and centre-cropped, never
 letterboxed: a black bar inside an already-small inset reads as a broken feed.
 
-**Neither camera is mirrored, in the file or on screen.** A mirrored preview is
-the phone-camera convention, but this footage is evidence — text in the cabin
-has to read the right way round — and a preview that disagrees with the file
-would defeat the point of compositing at capture.
+**The front camera is mirrored, in the file and on screen; the back camera
+never is.** Mirroring the front lens is the phone-camera convention and the
+only thing a driver checking their framing can read, and the file follows the
+preview rather than disagreeing with it — a viewfinder that contradicted the
+footage would defeat the point of compositing at capture. This supersedes the
+original unmirrored-everywhere rule, which made the front viewfinder read
+backwards. In `both` mode the main stream is the road, so only the inset is
+mirrored.
 
 ### Android — concurrent camera into the existing `OverlayEffect`
 
@@ -255,7 +259,7 @@ two single-camera modes.
 Inputs and outputs are added with `addInputWithNoConnections` /
 `addOutputWithNoConnections` and wired by explicit `AVCaptureConnection`s;
 multi-cam will not form implicit connections. The front connection sets
-`isVideoMirrored = false`.
+`isVideoMirrored = true`, the back one `false`.
 
 - A second `AVCaptureVideoDataOutput` carries the front camera, delivering on
   the same `sessionQueue` — the writer is already single-threaded on that queue
@@ -410,7 +414,8 @@ and one iPhone with multi-cam (not simulators — the emulator camera is fake):
 1. Open Settings cold. Camera shows Back selected. On the phone without
    concurrent support, **Both** is visibly disabled with its reason underneath.
 2. Select **Front**. Return to the recorder: the standby preview is the front
-   camera, upright, **not mirrored**, with the timestamp still bottom-right.
+   camera, upright, **mirrored**, with the timestamp still bottom-right — and
+   the saved clip matches it. Check the burned-in timestamp reads forwards.
 3. Select **Both**. The standby preview shows the road with the front camera in
    the top-right, inset, rounded, not stretched.
 4. Quality lists 360p–720p under Both on Android (with the cap note) and

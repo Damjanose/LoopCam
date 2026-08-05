@@ -44,15 +44,11 @@ class LoopcamRecorderView: ExpoView {
     let layer = AVCaptureVideoPreviewLayer(session: session)
     layer.videoGravity = videoGravity
     layer.frame = bounds
-    // A preview layer fed by the front camera mirrors itself by default — the
-    // selfie convention. The file is not mirrored (SegmentRecorder), so left
-    // alone this is the one surface that disagrees with the footage: the driver
-    // frames the cabin against a picture that is flipped from the evidence.
-    // Harmless on the back camera, which is never mirrored either way.
-    if let connection = layer.connection, connection.isVideoMirroringSupported {
-      connection.automaticallyAdjustsVideoMirroring = false
-      connection.isVideoMirrored = false
-    }
+    // Mirroring is left to AVFoundation's own default for the connected lens:
+    // the front viewfinder reads as a mirror, which is what every camera on the
+    // phone does and what a driver checking their framing expects. Forcing it
+    // off is what left the front preview reversed left-to-right. The file is
+    // still written unmirrored (`SegmentRecorder`) — evidence, not a selfie.
     self.layer.insertSublayer(layer, at: 0)
     previewLayer = layer
     attachFront(session: session)
@@ -85,11 +81,12 @@ class LoopcamRecorderView: ExpoView {
     layer.borderColor = UIColor.white.withAlphaComponent(WatermarkStyle.Pip.borderAlpha).cgColor
 
     let connection = AVCaptureConnection(inputPort: frontPort, videoPreviewLayer: layer)
-    // Unmirrored, matching the file. A viewfinder that disagreed with the
-    // footage would defeat the point of compositing at capture.
+    // Mirrored, matching the inset the writer burns in. A viewfinder that
+    // disagreed with the footage would defeat the point of compositing at
+    // capture.
     if connection.isVideoMirroringSupported {
       connection.automaticallyAdjustsVideoMirroring = false
-      connection.isVideoMirrored = false
+      connection.isVideoMirrored = true
     }
     guard session.canAddConnection(connection) else { return }
     session.addConnection(connection)

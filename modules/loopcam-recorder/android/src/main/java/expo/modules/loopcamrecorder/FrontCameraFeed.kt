@@ -80,14 +80,19 @@ internal class FrontCameraFeed : ImageAnalysis.Analyzer {
    * draws every frame the back camera produces and would otherwise repeat this
    * rotation two to four times for the same picture.
    *
-   * Not mirrored. A mirrored selfie is the phone-camera convention, but this
-   * footage is evidence — text inside the cabin has to read the right way round.
+   * Mirrored, like the front camera everywhere else: the single-camera front
+   * recording is written mirrored (`MIRROR_MODE_ON_FRONT_ONLY`) and the
+   * viewfinder shows a mirror, so an unmirrored inset would be the one front
+   * picture in the app facing the other way.
    */
   private fun upright(image: ImageProxy): Bitmap {
     val source = image.toBitmap()
-    val rotation = image.imageInfo.rotationDegrees
-    if (rotation == 0) return source
-    val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+    val matrix = Matrix().apply {
+      postRotate(image.imageInfo.rotationDegrees.toFloat())
+      // After the rotation, so the flip is across the *displayed* vertical axis
+      // whatever the sensor orientation was.
+      postScale(-1f, 1f)
+    }
     return Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
   }
 

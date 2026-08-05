@@ -11,6 +11,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraState
 import androidx.camera.core.ConcurrentCamera
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.MirrorMode
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCaseGroup
 import androidx.camera.core.ViewPort
@@ -120,7 +121,13 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     val recorder = Recorder.Builder()
       .setQualitySelector(QualitySelector.fromOrderedList(qualityLadder(config.videoQuality)))
       .build()
-    val capture = VideoCapture.withOutput(recorder)
+    // Front-facing footage is written mirrored, so the file matches the
+    // viewfinder the driver framed it against. `ON_FRONT_ONLY` is the whole
+    // rule: the back camera — including `both` mode, whose main stream is the
+    // road — is never mirrored.
+    val capture = VideoCapture.Builder(recorder)
+      .setMirrorMode(MirrorMode.MIRROR_MODE_ON_FRONT_ONLY)
+      .build()
     val preview = Preview.Builder().build()
 
     // Bind on the main thread and *wait for the camera to actually open*.
@@ -177,9 +184,6 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
         // Whichever preview view is mounted now — or mounts later — gets this
         // session's frames, without either side owning the other (§3.1).
         CameraPreviewBus.subscribe { surfaceProvider -> preview.setSurfaceProvider(surfaceProvider) }
-        // The lens travels with the surface: the view has to undo PreviewView's
-        // front-camera mirroring, and only this side knows which lens it bound.
-        CameraPreviewBus.publishFacing(mode == CameraMode.FRONT)
 
         val states = camera.cameraInfo.cameraState
         val observer = object : Observer<CameraState> {
@@ -456,7 +460,6 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
           .build()
         bind(provider, owner, mode, group, frontAnalysis)
         CameraPreviewBus.subscribe { surfaceProvider -> preview.setSurfaceProvider(surfaceProvider) }
-        CameraPreviewBus.publishFacing(mode == CameraMode.FRONT)
         standbyPreview = preview
         standbyFrontAnalysis = frontAnalysis
         standbyWatermark = watermark
@@ -474,9 +477,6 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
       if (standbyPreview == null) return@execute
       if (videoCapture == null) {
         CameraPreviewBus.subscribe(null)
-        // Cleared with the picture, so a flip cannot outlive the front camera
-        // that justified it and be inherited by the next thing bound.
-        CameraPreviewBus.publishFacing(false)
       }
       cameraProvider?.let { releaseStandby(it) }
     }
@@ -536,7 +536,6 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     mainExecutor.execute {
       stopWatchingState()
       CameraPreviewBus.subscribe(null)
-      CameraPreviewBus.publishFacing(false)
       standbyPreview = null
       // Analyzers off before the unbind, so no conversion is in flight while
       // the pipeline is being pulled apart.

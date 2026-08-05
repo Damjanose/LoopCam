@@ -34,37 +34,4 @@ object CameraPreviewBus {
     sink = newSink
     newSink?.invoke(provider)
   }
-
-  /**
-   * Which lens is feeding the picture — the second thing the view cannot work
-   * out for itself.
-   *
-   * It exists for one reason: `PreviewView` mirrors the front camera by
-   * default, the file is never mirrored, and only the recorder knows which
-   * camera it just bound. Travelling the same seam as the surface keeps the
-   * view a window onto the session rather than a second reader of the config.
-   */
-  private var front = false
-  private val facingSinks = mutableSetOf<(Boolean) -> Unit>()
-
-  /** Called by the recorder after every bind, live or standby. */
-  @MainThread
-  fun publishFacing(isFront: Boolean) {
-    front = isFront
-    // Copied: a sink that unregisters itself while we are notifying would
-    // otherwise take the iteration down with it.
-    facingSinks.toList().forEach { it(isFront) }
-  }
-
-  /** Replays the current lens immediately, for a view that mounts mid-session. */
-  @MainThread
-  fun observeFacing(sink: (Boolean) -> Unit) {
-    facingSinks += sink
-    sink(front)
-  }
-
-  @MainThread
-  fun unobserveFacing(sink: (Boolean) -> Unit) {
-    facingSinks -= sink
-  }
 }
