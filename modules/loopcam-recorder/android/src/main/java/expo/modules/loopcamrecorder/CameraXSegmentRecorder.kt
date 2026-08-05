@@ -437,11 +437,7 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
       // A live session already owns the camera and is already feeding the bus.
       // Binding a second preview over it would fight for the same surface.
       if (videoCapture != null) return@addListener
-      standbyPreview?.let { provider.unbind(it) }
-      standbyFrontAnalysis?.let { provider.unbind(it) }
-      standbyFrontAnalysis = null
-      standbyWatermark?.close()
-      standbyWatermark = null
+      releaseStandby(provider)
       val preview = Preview.Builder().build()
       // Standby shows the inset, for the same reason the live session's screen
       // does: the viewfinder's job is to show the framing a recording would
@@ -475,25 +471,58 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
   /** Drop the standby picture. Never touches a live session's own preview. */
   fun stopPreview() {
     mainExecutor.execute {
-      val preview = standbyPreview ?: return@execute
-      standbyPreview = null
+      if (standbyPreview == null) return@execute
       if (videoCapture == null) {
         CameraPreviewBus.subscribe(null)
         // Cleared with the picture, so a flip cannot outlive the front camera
         // that justified it and be inherited by the next thing bound.
         CameraPreviewBus.publishFacing(false)
       }
-      cameraProvider?.unbind(preview)
-      standbyFrontAnalysis?.let {
-        // Detached before the unbind: an analyzer left attached keeps
-        // converting frames onto a feed nothing will read.
-        it.clearAnalyzer()
-        cameraProvider?.unbind(it)
-      }
-      standbyFrontAnalysis = null
-      standbyWatermark?.close()
-      standbyWatermark = null
+      cameraProvider?.let { releaseStandby(it) }
     }
+  }
+
+  /**
+   * Tears the standby bind down — all of it, by unbinding *everything*.
+   *
+   * Not `unbind(useCase)`, which is what this used to do and is what crashed
+   * the app. A `both` standby is a concurrent bind, and CameraX refuses to
+   * unbind use cases one by one while one is live:
+   *
+   *     UnsupportedOperationException: Unbind usecase is not supported in
+   *     concurrent camera mode, call unbindAll() first.
+   *
+   * Thrown on the main thread, from the teardown that runs when the recorder
+   * screen goes away — so in `both` mode, opening Settings or Saved clips took
+   * the process down with it, as did coming back to a screen that then rebound.
+   *
+   * Unbinding everything is safe precisely where this is called from: both
+   * callers have already established that no recording session is bound (a live
+   * session sends [startPreview] home early, and [stopPreview] only runs when
+   * there is a standby to drop, which cannot coexist with one). It also resets
+   * the provider's operating mode, which is what lets the *next* bind — single
+   * or concurrent — start from a clean slate.
+   *
+   * A refusal is logged rather than thrown: this runs on the way out of a
+   * screen, where there is nothing left to salvage and nothing worth crashing
+   * for.
+   */
+  private fun releaseStandby(provider: ProcessCameraProvider) {
+    // Nothing of ours is bound, so there is nothing to unbind — and unbinding
+    // everything anyway would reach past the standby and pull down a session
+    // that [prepare] has bound but not yet published as `videoCapture`.
+    if (standbyPreview == null && standbyFrontAnalysis == null) return
+    // Detached before the unbind: an analyzer left attached keeps converting
+    // frames onto a feed nothing will read.
+    standbyFrontAnalysis?.clearAnalyzer()
+    runCatching { provider.unbindAll() }
+      .onFailure { Log.w(TAG, "Could not release the standby preview", it) }
+    standbyPreview = null
+    standbyFrontAnalysis = null
+    // After the unbind, never before: an effect closed while its use cases are
+    // still bound pulls the surface out from under the pipeline.
+    standbyWatermark?.close()
+    standbyWatermark = null
   }
 
   override fun release() {
