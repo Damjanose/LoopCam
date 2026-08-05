@@ -32,6 +32,16 @@ class LoopcamRecorderModule extends NativeModule<LoopcamRecorderEvents> {
     return false;
   }
 
+  hasPermissions(): boolean {
+    return false;
+  }
+
+  // Not `unsupported()`: the preview is decoration, and a screen that merely
+  // has nothing to show must still render on web.
+  async startPreview(): Promise<void> {}
+
+  async stopPreview(): Promise<void> {}
+
   async start(): Promise<BufferStatus> {
     return unsupported();
   }

@@ -20,6 +20,20 @@ declare class LoopcamRecorderModule extends NativeModule<LoopcamRecorderEvents> 
 
   /** Camera + mic (+ location, when tagging is on). Resolves to granted. */
   requestPermissions(): Promise<boolean>;
+  /**
+   * Whether recording could start right now without a prompt. Synchronous and
+   * side-effect free — asking must never raise a system dialog.
+   */
+  hasPermissions(): boolean;
+
+  /**
+   * Light the viewfinder without recording: no service, no clips, nothing on
+   * disk. Safe to call while recording, where it is a no-op — the session's own
+   * preview is already feeding the view.
+   */
+  startPreview(): Promise<void>;
+  /** Drop the standby picture. Never disturbs a live recording's preview. */
+  stopPreview(): Promise<void>;
 
   /** PLAY — clear leftover temp clips and start the segment loop. */
   start(): Promise<BufferStatus>;

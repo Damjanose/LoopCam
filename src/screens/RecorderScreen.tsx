@@ -28,6 +28,16 @@ const formatDuration = (seconds: number) => {
 const SEGMENTS = 28;
 
 /**
+ * Shutter geometry, from the stock camera apps: an outer ring that never moves
+ * and an inner shape that carries the state. Oversized for a phone — this one
+ * is pressed at arm's length, on a bracket, without looking straight at it.
+ */
+const SHUTTER = 84;
+const SHUTTER_CORE = SHUTTER - 20;
+/** The flanking slots. Equal widths are what centre the shutter. */
+const SLOT = 62;
+
+/**
  * The driving screen: mounted on a dashboard holder, glanced at, not read.
  * Everything is sized for a single glance at arm's length — no small text, no
  * controls that need aim.
@@ -122,55 +132,60 @@ export default function RecorderScreen({ onOpenSaved }: { onOpenSaved: () => voi
             </View>
           )}
 
+          {/* Stock-camera control bar: one shutter on the centre line, one
+              secondary action orbiting it. The empty left slot is deliberate —
+              it is what keeps the shutter under the thumb's centre of travel. */}
           <View style={styles.controls}>
-            <Control
-              label="Stop"
-              tone="neutral"
-              disabled={!isRecording || busy}
-              onPress={stop}
-            />
-            <Control
-              label={isRecording ? 'Recording' : 'Play'}
-              tone="primary"
-              disabled={isRecording || busy}
-              onPress={play}
-            />
-            {/* Save keeps recording — deliberately not a stop-then-save (§2.3). */}
-            <Control label="Save" tone="accent" disabled={!isRecording || busy} onPress={save} />
+            <View style={styles.slot} />
+
+            {/* Start and stop are the same button, as on every camera: the two
+                actions are mutually exclusive states of one recording toggle,
+                so a second button could only ever be the disabled one. */}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={isRecording ? 'Stop recording' : 'Start recording'}
+              accessibilityState={{ disabled: busy }}
+              disabled={busy}
+              onPress={isRecording ? stop : play}
+              hitSlop={12}
+              style={({ pressed }) => [
+                styles.shutter,
+                busy && styles.buttonDisabled,
+                pressed && styles.shutterPressed,
+              ]}>
+              {/* Filled circle at rest, square while running — the shape is the
+                  state readout, legible without reading the word "Rec". */}
+              <View style={[styles.shutterCore, isRecording && styles.shutterCoreLive]} />
+            </Pressable>
+
+            {/* Save only exists while there is something to save — with an empty
+                buffer the button is not merely inert, it is meaningless, and a
+                permanently greyed control on a three-item bar reads as broken.
+                The slot stays behind it so the shutter never shifts. */}
+            {isRecording ? (
+              /* Save keeps recording — deliberately not a stop-then-save (§2.3). */
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Save the last few minutes"
+                accessibilityState={{ disabled: busy }}
+                disabled={busy}
+                onPress={save}
+                hitSlop={12}
+                style={({ pressed }) => [
+                  styles.slot,
+                  styles.save,
+                  busy && styles.buttonDisabled,
+                  pressed && styles.buttonPressed,
+                ]}>
+                <Text style={styles.saveLabel}>Save</Text>
+              </Pressable>
+            ) : (
+              <View style={styles.slot} />
+            )}
           </View>
         </View>
       </SafeAreaView>
     </View>
-  );
-}
-
-function Control({
-  label,
-  tone,
-  disabled,
-  onPress,
-}: {
-  label: string;
-  tone: 'primary' | 'accent' | 'neutral';
-  disabled: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.button,
-        styles[tone],
-        disabled && styles.buttonDisabled,
-        pressed && styles.buttonPressed,
-      ]}>
-      <Text style={[styles.buttonLabel, tone === 'accent' && styles.buttonLabelAccent]}>
-        {label}
-      </Text>
-    </Pressable>
   );
 }
 
@@ -267,32 +282,51 @@ const styles = StyleSheet.create({
   toastLabelError: { color: colors.danger },
   toastLabelOk: { color: colors.accent },
 
-  controls: { flexDirection: 'row', gap: 10 },
-  button: {
-    flex: 1,
-    paddingVertical: 20,
-    borderRadius: radius.md,
+  controls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 8,
+    paddingTop: 4,
+  },
+  /** Side slots are equal width so the shutter sits on the screen's centre line. */
+  slot: { width: SLOT, height: SLOT, alignItems: 'center', justifyContent: 'center' },
+
+  /** The ring: untouched by state, so the target never moves or changes size. */
+  shutter: {
+    width: SHUTTER,
+    height: SHUTTER,
+    borderRadius: SHUTTER / 2,
+    borderWidth: 4,
+    borderColor: colors.text,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.hairline,
-    backgroundColor: colors.glass,
   },
-  buttonLabel: { ...legend, fontSize: 14, color: colors.text },
-  buttonLabelAccent: { color: colors.onAccent },
-  buttonPressed: { opacity: 0.6 },
-  buttonDisabled: { opacity: 0.3 },
-  neutral: {},
-  primary: { borderColor: colors.hairlineStrong },
+  shutterPressed: { opacity: 0.7 },
+  shutterCore: {
+    width: SHUTTER_CORE,
+    height: SHUTTER_CORE,
+    borderRadius: SHUTTER_CORE / 2,
+    backgroundColor: colors.live,
+  },
+  shutterCoreLive: {
+    width: SHUTTER_CORE * 0.46,
+    height: SHUTTER_CORE * 0.46,
+    borderRadius: radius.sm,
+  },
+
   /** The one filled, coloured element on the screen — the reason the app exists. */
-  accent: {
-    flex: 1.35,
+  save: {
+    borderRadius: SLOT / 2,
     backgroundColor: colors.accent,
-    borderColor: colors.accent,
     shadowColor: colors.accent,
     shadowOpacity: 0.45,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 4 },
     elevation: 6,
   },
+  saveLabel: { ...legend, fontSize: 12, color: colors.onAccent },
+
+  buttonPressed: { opacity: 0.6 },
+  buttonDisabled: { opacity: 0.3 },
 });

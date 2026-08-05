@@ -1,9 +1,12 @@
 package expo.modules.loopcamrecorder
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.LifecycleOwner
 import expo.modules.interfaces.permissions.PermissionsStatus
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.Exceptions
@@ -62,7 +65,7 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
       // but a refusal must not block the drive. FOREGROUND_SERVICE_CAMERA is
       // install-time, not runtime — asking for it here would resolve false and
       // lock Play out entirely.
-      val required = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+      val required = REQUIRED_PERMISSIONS
       val optional = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         arrayOf(Manifest.permission.POST_NOTIFICATIONS)
       } else {
@@ -79,6 +82,33 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
           promise.resolve(required.all { result[it]?.status == PermissionsStatus.GRANTED })
         }, *(required + optional))
       }
+    }
+
+    /**
+     * Whether recording could start right now without a prompt. Synchronous and
+     * side-effect free on purpose: it is asked on mount to decide whether the
+     * viewfinder may light up, and a screen opening is not the moment to throw a
+     * system dialog at someone who has not asked for anything yet.
+     */
+    Function("hasPermissions") {
+      REQUIRED_PERMISSIONS.all {
+        ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+      }
+    }
+
+    /**
+     * Light the viewfinder without recording. No foreground service and no
+     * files — this is the picture only, bound to the Activity so it goes away
+     * with the screen.
+     */
+    AsyncFunction("startPreview") {
+      val owner = appContext.currentActivity as? LifecycleOwner
+        ?: throw Exceptions.MissingActivity()
+      cameraRecorder.startPreview(owner)
+    }
+
+    AsyncFunction("stopPreview") {
+      cameraRecorder.stopPreview()
     }
 
     /**
@@ -310,6 +340,10 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
 
   companion object {
     private const val TAG = "LoopCam/Module"
+
+    /** The two that actually gate capture; everything else is a nicety. */
+    private val REQUIRED_PERMISSIONS =
+      arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
 
     /** Shared with [RecordingService] so notification actions hit the live loop. */
     @JvmStatic

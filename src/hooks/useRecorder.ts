@@ -126,6 +126,32 @@ export function useRecorder() {
   const isRecording = status.state === 'recording' || status.state === 'saving';
 
   /**
+   * Standby preview.
+   *
+   * Without it the viewfinder is a black rectangle until Play is pressed — the
+   * camera is only bound as part of starting the buffer, so "is this thing even
+   * pointed at the road?" is unanswerable at exactly the moment the phone is
+   * being seated in its bracket.
+   *
+   * Armed only when permission is already held: opening a screen is not a
+   * reason to raise a system dialog. Whoever has not granted it yet gets asked
+   * by Play, which is where the ask is actually motivated.
+   *
+   * Re-armed when recording ends, because stopping unbinds the session's camera
+   * and takes the picture down with it. And dropped when the screen goes away,
+   * so browsing the gallery does not hold the camera open for a view that is no
+   * longer mounted — while a *recording* session, which outlives this screen by
+   * design (§3.1), is left strictly alone.
+   */
+  useEffect(() => {
+    if (isRecording || !LoopcamRecorder.hasPermissions()) return;
+    void LoopcamRecorder.startPreview();
+    return () => {
+      void LoopcamRecorder.stopPreview();
+    };
+  }, [isRecording]);
+
+  /**
    * Native only emits on real events — a clip boundary, a state change — which
    * is every `clipDurationSec` seconds. Rendering `status` alone therefore
    * leaves the clock reading 00:00 for the first ten seconds of a drive, which

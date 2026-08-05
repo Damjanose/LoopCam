@@ -47,6 +47,18 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
   private var cameraProvider: ProcessCameraProvider? = null
   private var videoCapture: VideoCapture<Recorder>? = null
   private var previewUseCase: Preview? = null
+
+  /**
+   * The standby preview: the camera bound to the screen and to nothing else.
+   *
+   * Held separately from [previewUseCase] because the two answer to different
+   * owners. This one belongs to the Activity, so it dies when the app is
+   * backgrounded — a picture with no recording behind it has no business
+   * holding the camera open off-screen, and doing so would burn battery and
+   * trip Android's foreground-camera rules for no gain. [previewUseCase] is the
+   * session's own, owned by the service, and must survive exactly that.
+   */
+  private var standbyPreview: Preview? = null
   private var activeRecording: Recording? = null
   private var stateSource: LiveData<CameraState>? = null
   private var stateObserver: Observer<CameraState>? = null
@@ -80,6 +92,10 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     mainExecutor.execute {
       try {
         provider.unbindAll()
+        // The standby bind went with it. Forgetting that here would leave a
+        // stale use case that `stopPreview` later unbinds — taking the live
+        // session's picture down with it.
+        standbyPreview = null
         val camera = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
         // Whichever preview view is mounted now — or mounts later — gets this
         // session's frames, without either side owning the other (§3.1).
@@ -203,6 +219,45 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     recording.stop()
   }
 
+  /**
+   * Light the preview without recording anything, so the viewfinder is a
+   * viewfinder from the moment the screen opens rather than a black rectangle
+   * that only becomes a camera once Play is pressed.
+   *
+   * Deliberately not blocking, unlike [prepare]: nothing downstream depends on
+   * the camera being open by the time this returns — if it never opens, the
+   * screen simply stays dark, which is what it would have been anyway. A
+   * failure here is therefore swallowed rather than surfaced; Play is where a
+   * broken camera has to be reported, because that is where it costs footage.
+   */
+  fun startPreview(owner: LifecycleOwner) {
+    val future = ProcessCameraProvider.getInstance(context)
+    future.addListener({
+      val provider = runCatching { future.get() }.getOrNull() ?: return@addListener
+      cameraProvider = provider
+      // A live session already owns the camera and is already feeding the bus.
+      // Binding a second preview over it would fight for the same surface.
+      if (videoCapture != null) return@addListener
+      standbyPreview?.let { provider.unbind(it) }
+      val preview = Preview.Builder().build()
+      runCatching {
+        provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview)
+        CameraPreviewBus.subscribe { surfaceProvider -> preview.setSurfaceProvider(surfaceProvider) }
+        standbyPreview = preview
+      }
+    }, mainExecutor)
+  }
+
+  /** Drop the standby picture. Never touches a live session's own preview. */
+  fun stopPreview() {
+    mainExecutor.execute {
+      val preview = standbyPreview ?: return@execute
+      standbyPreview = null
+      if (videoCapture == null) CameraPreviewBus.subscribe(null)
+      cameraProvider?.unbind(preview)
+    }
+  }
+
   override fun release() {
     activeRecording?.let { recording ->
       discardCurrent = true
@@ -214,6 +269,7 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     mainExecutor.execute {
       stopWatchingState()
       CameraPreviewBus.subscribe(null)
+      standbyPreview = null
       cameraProvider?.unbindAll()
     }
   }

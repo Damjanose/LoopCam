@@ -61,6 +61,35 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
       }
     }
 
+    /// Whether recording could start right now without a prompt. Synchronous
+    /// and side-effect free on purpose: it is asked on mount to decide whether
+    /// the viewfinder may light up, and a screen opening is not the moment to
+    /// throw a system dialog at someone who has not asked for anything yet.
+    Function("hasPermissions") {
+      AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+        && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
+
+    /// Light the viewfinder without recording.
+    ///
+    /// On iOS this is the ordinary capture session with no clip open against
+    /// it: `prepare` configures the inputs and publishes to the preview bus,
+    /// and nothing reaches disk until `startClip`. So standby costs a running
+    /// session and no files — which is why there is no separate preview path
+    /// here the way there is on Android.
+    AsyncFunction("startPreview") {
+      // Not fatal: a camera that will not open leaves the screen dark, which is
+      // what it would have been anyway. Play is where that has to be reported,
+      // because that is where it costs footage.
+      try? self.recorder.prepare(config: self.controller.currentConfig)
+    }
+
+    AsyncFunction("stopPreview") {
+      // A live session's own preview is not this function's to take down.
+      guard self.controller.status.state == .idle else { return }
+      self.recorder.teardown()
+    }
+
     /// PLAY.
     AsyncFunction("start") { () -> [String: Any] in
       // §5.2 — iOS has no foreground-service equivalent. Keeping the screen
