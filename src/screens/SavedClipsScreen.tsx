@@ -72,6 +72,39 @@ export default function SavedClipsScreen({ onBack }: { onBack: () => void }) {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    // The budget sweep (§7.2) runs on save, which can happen while this screen
+    // is open — the files are already gone, so the rows have to follow rather
+    // than sit there offering playback of nothing.
+    const subscription = LoopcamRecorder.addListener('onStorageWarning', ({ deletedClipIds }) => {
+      if (deletedClipIds.length === 0) return;
+      setClips((current) => current?.filter((clip) => !deletedClipIds.includes(clip.id)) ?? current);
+    });
+    return () => subscription.remove();
+  }, []);
+
+  /**
+   * Protection is what keeps a clip out of the budget sweep, so this is the one
+   * control on this screen with consequences beyond the row it sits on.
+   *
+   * Optimistic: the write is a marker file next to the clip, and a failure
+   * re-syncs from disk anyway.
+   */
+  const toggleProtected = useCallback(
+    async (clip: SavedClip) => {
+      const next = !clip.protected;
+      setClips((current) =>
+        current?.map((c) => (c.id === clip.id ? { ...c, protected: next } : c)) ?? current,
+      );
+      try {
+        await LoopcamRecorder.setClipProtected(clip.id, next);
+      } catch {
+        void load();
+      }
+    },
+    [load],
+  );
+
   /**
    * Commit the outstanding delete for real. Called by the 5 s timer, by the
    * next delete, by leaving this screen, and by backgrounding the app — any of
@@ -237,6 +270,18 @@ export default function SavedClipsScreen({ onBack }: { onBack: () => void }) {
                     {formatSize(item.sizeBytes)}
                   </Text>
                 </View>
+                <Pressable
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: item.protected }}
+                  accessibilityLabel={
+                    item.protected ? 'Unprotect this clip' : 'Protect this clip from auto-delete'
+                  }
+                  hitSlop={12}
+                  onPress={() => void toggleProtected(item)}>
+                  <Text style={[styles.rowLock, item.protected && styles.rowLockOn]}>
+                    {item.protected ? '🔒' : '🔓'}
+                  </Text>
+                </Pressable>
                 <Text style={styles.rowChevron}>›</Text>
               </Pressable>
             </SwipeableRow>
@@ -325,5 +370,8 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   rowMetaSep: { color: colors.textFaint },
+  // Dimmed when off so the row reads as one object until the lock is engaged.
+  rowLock: { fontSize: 16, opacity: 0.35, paddingHorizontal: 6 },
+  rowLockOn: { opacity: 1 },
   rowChevron: { color: colors.textFaint, fontSize: 20 },
 });

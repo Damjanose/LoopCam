@@ -51,6 +51,26 @@ class StorageManager(private val context: Context) {
   fun metadataFileFor(video: File): File =
     File(video.parentFile, video.nameWithoutExtension + ".json")
 
+  /**
+   * §7.2 — protection is a marker file rather than app state: the saved
+   * directory is the index, and a flag that lives only in memory silently
+   * un-protects every clip on process death, which is exactly when the budget
+   * sweep is most likely to run.
+   */
+  fun protectionMarkerFor(video: File): File =
+    File(video.parentFile, video.nameWithoutExtension + ".protected")
+
+  fun isProtected(video: File): Boolean = protectionMarkerFor(video).exists()
+
+  fun setProtected(video: File, isProtected: Boolean) {
+    val marker = protectionMarkerFor(video)
+    if (isProtected) {
+      if (!marker.exists()) marker.createNewFile()
+    } else {
+      marker.delete()
+    }
+  }
+
   /** STOP wipes the whole session directory (§7.1). */
   fun deleteSession(sessionId: String) {
     sessionDir(sessionId).deleteRecursively()
@@ -70,6 +90,49 @@ class StorageManager(private val context: Context) {
       if (dir.deleteRecursively()) removed++
     }
     return removed
+  }
+
+  /**
+   * §7.2 — the budget sweep. Oldest-first among unprotected clips until both
+   * the byte budget and the count limit are met. Returns the ids removed, so
+   * the caller can tell JS which rows just vanished from under it.
+   *
+   * Protected clips are counted against the budget but never deleted: a user
+   * who locks 5 GB of footage has told us to stop reclaiming space, and quietly
+   * overriding that would be worse than running out.
+   */
+  fun enforceBudget(): List<String> {
+    val files = savedRoot.listFiles { f: File -> f.extension == "mp4" } ?: return emptyList()
+    var totalBytes = files.sumOf { it.length() }
+    var count = files.size
+    val removed = mutableListOf<String>()
+
+    val candidates = files.filterNot { isProtected(it) }.sortedBy { it.lastModified() }
+    for (file in candidates) {
+      if (totalBytes <= SAVED_STORAGE_BUDGET_BYTES && count <= SAVED_CLIP_COUNT_LIMIT) break
+      val size = file.length()
+      val id = file.nameWithoutExtension
+      if (!file.delete()) continue
+      metadataFileFor(file).delete()
+      protectionMarkerFor(file).delete()
+      totalBytes -= size
+      count -= 1
+      removed += id
+    }
+    return removed
+  }
+
+  /**
+   * Count and bytes of the saved directory, without opening a single file.
+   *
+   * The gallery's clip list needs a duration per clip, which costs a
+   * MediaMetadataRetriever each; the storage figures do not. Reusing the clip
+   * list here would put ~50 container reads on the save path, every save,
+   * while the buffer is still recording.
+   */
+  fun savedFootprint(): Pair<Int, Long> {
+    val files = savedRoot.listFiles { f: File -> f.extension == "mp4" } ?: return 0 to 0L
+    return files.size to files.sumOf { it.length() }
   }
 
   fun storageStatus(savedClipCount: Int, savedBytes: Long): StorageStatus {

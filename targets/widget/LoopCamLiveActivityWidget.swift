@@ -58,7 +58,7 @@ private struct LockScreenCard: View {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         StatusDot(isBusy: state.isBusy)
         VStack(alignment: .leading, spacing: 1) {
-          Text("LoopCam")
+          Text("DashCam")
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.white)
           // The banner takes the subtitle when there is one — on a locked

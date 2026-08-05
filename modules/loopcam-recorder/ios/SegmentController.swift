@@ -4,7 +4,7 @@ protocol SegmentControllerDelegate: AnyObject {
   func segmentControllerDidChangeState(_ status: BufferStatus)
   func segmentControllerDidFinishClip(_ status: BufferStatus)
   func segmentControllerDidSave(_ clip: SavedClip)
-  func segmentControllerDidError(_ code: RecorderErrorCode, _ message: String)
+  func segmentControllerDidError(_ code: RecorderErrorCode, _ message: String, _ status: BufferStatus)
 }
 
 /// The §2.3 state machine and §2.4 ring buffer.
@@ -140,7 +140,9 @@ final class SegmentController {
           self.delegate?.segmentControllerDidSave(saved)
           completion(.success(saved))
         } catch {
-          self.fail(.mergeFailed, error)
+          // Back onto `queue` — `fail` reads state through `statusLocked()`,
+          // which is only safe there.
+          self.queue.async { self.fail(.mergeFailed, error) }
           completion(.failure(error))
         }
       }
@@ -210,7 +212,10 @@ final class SegmentController {
     delegate?.segmentControllerDidChangeState(statusLocked())
   }
 
+  /// Must be called on `queue`: it reads state via `statusLocked()` and hands
+  /// the result to the delegate, so the delegate never has to reach back into
+  /// `status` — doing so from here would re-enter `queue` and deadlock.
   private func fail(_ code: RecorderErrorCode, _ error: Error) {
-    delegate?.segmentControllerDidError(code, error.localizedDescription)
+    delegate?.segmentControllerDidError(code, error.localizedDescription, statusLocked())
   }
 }

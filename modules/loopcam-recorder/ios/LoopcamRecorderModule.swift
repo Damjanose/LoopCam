@@ -16,7 +16,6 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
     merger: ClipMerger(storage: storage),
     delegate: self
   )
-  private var protectedIds = Set<String>()
   /// Live Activity button taps. Held so `OnDestroy` can drop them — a reload
   /// otherwise leaves a dead module answering the Lock Screen.
   private var liveActivityObservers: [NSObjectProtocol] = []
@@ -52,8 +51,9 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
     }
 
     AsyncFunction("requestPermissions") { (promise: Promise) in
-      // TODO(phase-2): also request CoreLocation "when in use" if GPS tagging
-      // is on, and surface the §5.2 "keep the screen on while driving" copy.
+      // Location is deliberately not requested: the GPS sidecar (§7.1) is not
+      // in this release, and a purpose string the app never exercises is an
+      // App Review problem. Re-add CoreLocation here together with the sidecar.
       AVCaptureDevice.requestAccess(for: .video) { videoGranted in
         AVCaptureDevice.requestAccess(for: .audio) { audioGranted in
           promise.resolve(videoGranted && audioGranted)
@@ -103,6 +103,9 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
 
     AsyncFunction("deleteSavedClip") { (id: String) in
       guard let clip = self.savedClips().first(where: { $0.id == id }) else { return }
+      // The marker goes with its clip; an orphan would silently protect the
+      // next clip that happened to land on the same timestamped name.
+      try? FileManager.default.removeItem(at: self.storage.protectionMarkerURL(for: clip.url))
       try? FileManager.default.removeItem(at: clip.url)
       if let metadataURL = clip.metadataURL {
         try? FileManager.default.removeItem(at: metadataURL)
@@ -110,19 +113,15 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
     }
 
     AsyncFunction("setClipProtected") { (id: String, isProtected: Bool) in
-      // TODO(phase-4): persist alongside the sidecar so it survives a restart.
-      if isProtected {
-        self.protectedIds.insert(id)
-      } else {
-        self.protectedIds.remove(id)
-      }
+      guard let clip = self.savedClips().first(where: { $0.id == id }) else { return }
+      self.storage.setProtected(clip.url, isProtected)
     }
 
     AsyncFunction("getStorageStatus") { () -> [String: Any] in
-      let clips = self.savedClips()
+      let footprint = self.storage.savedFootprint()
       return self.storage.storageStatus(
-        savedClipCount: clips.count,
-        savedBytes: clips.reduce(0) { $0 + $1.sizeBytes }
+        savedClipCount: footprint.count,
+        savedBytes: footprint.bytes
       ).asDictionary()
     }
 
@@ -160,11 +159,25 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
   func segmentControllerDidSave(_ clip: SavedClip) {
     sendEvent("onSaved", clip.asDictionary() as [String: Any])
     LiveActivityBridge.post(LiveActivityBridge.update, controller.status, banner: "Clip saved")
+
+    // A save is the only moment saved storage grows, so the only moment the
+    // budget can be breached (§7.2).
+    let deleted = storage.enforceBudget()
+    let footprint = storage.savedFootprint()
+    let status = storage.storageStatus(
+      savedClipCount: footprint.count,
+      savedBytes: footprint.bytes
+    )
+    if !deleted.isEmpty || status.lowSpaceWarning {
+      var payload = status.asDictionary()
+      payload["deletedClipIds"] = deleted
+      sendEvent("onStorageWarning", payload)
+    }
   }
 
-  func segmentControllerDidError(_ code: RecorderErrorCode, _ message: String) {
+  func segmentControllerDidError(_ code: RecorderErrorCode, _ message: String, _ status: BufferStatus) {
     sendEvent("onError", ["code": code.rawValue, "message": message])
-    LiveActivityBridge.post(LiveActivityBridge.update, controller.status, banner: message)
+    LiveActivityBridge.post(LiveActivityBridge.update, status, banner: message)
   }
 
   // MARK: - Lock Screen controls
@@ -227,7 +240,7 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
 
     return urls
       .filter { $0.pathExtension == "mp4" }
-      .sorted { lhs, rhs in modifiedAt(lhs) > modifiedAt(rhs) }
+      .sorted { lhs, rhs in storage.modifiedAt(lhs) > storage.modifiedAt(rhs) }
       .map { url in
         let sidecar = storage.metadataURL(for: url)
         let id = url.deletingPathExtension().lastPathComponent
@@ -235,18 +248,12 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
           id: id,
           url: url,
           metadataURL: fm.fileExists(atPath: sidecar.path) ? sidecar : nil,
-          createdAtMs: modifiedAt(url).timeIntervalSince1970 * 1000,
-          // TODO(phase-3): read the real duration from AVAsset.
-          durationSec: 0,
+          createdAtMs: storage.modifiedAt(url).timeIntervalSince1970 * 1000,
+          durationSec: storage.durationSec(at: url),
           sizeBytes: storage.fileSize(at: url),
-          isProtected: protectedIds.contains(id),
+          isProtected: storage.isProtected(url),
           trigger: .manual
         )
       }
-  }
-
-  private func modifiedAt(_ url: URL) -> Date {
-    (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
-      ?? Date.distantPast
   }
 }

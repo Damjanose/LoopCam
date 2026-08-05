@@ -37,6 +37,7 @@ DerivedData/
 # LoopCam.keystore is deliberately committed (see README "Signing"). Its
 # passwords are NOT and must never be — they are the only thing keeping the
 # committed key from being usable by anyone who clones this public repo.
+.keystore-password.txt
 *.jks
 *.p8
 *.p12
@@ -44,6 +45,7 @@ DerivedData/
 *.mobileprovision
 credentials.json
 gradle.properties
+play-service-account.json
 
 # Metro
 .metro-health-check*

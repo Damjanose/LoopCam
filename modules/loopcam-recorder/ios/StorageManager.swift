@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 /// §7.1 file naming & layout, inside the app sandbox.
@@ -32,6 +33,29 @@ final class StorageManager {
     video.deletingPathExtension().appendingPathExtension("json")
   }
 
+  /// §7.2 — protection is a marker file rather than app state: the saved
+  /// directory is the index, and a flag that lives only in memory silently
+  /// un-protects every clip on process death, which is exactly when the budget
+  /// sweep is most likely to run.
+  func protectionMarkerURL(for video: URL) -> URL {
+    video.deletingPathExtension().appendingPathExtension("protected")
+  }
+
+  func isProtected(_ video: URL) -> Bool {
+    fm.fileExists(atPath: protectionMarkerURL(for: video).path)
+  }
+
+  func setProtected(_ video: URL, _ isProtected: Bool) {
+    let marker = protectionMarkerURL(for: video)
+    if isProtected {
+      if !fm.fileExists(atPath: marker.path) {
+        fm.createFile(atPath: marker.path, contents: nil)
+      }
+    } else {
+      try? fm.removeItem(at: marker)
+    }
+  }
+
   /// STOP wipes the whole session directory (§7.1).
   func deleteSession(_ sessionId: String) {
     try? fm.removeItem(at: sessionDir(sessionId))
@@ -53,6 +77,55 @@ final class StorageManager {
     return removed
   }
 
+  /// §7.2 — the budget sweep. Oldest-first among unprotected clips until both
+  /// the byte budget and the count limit are met. Returns the ids removed, so
+  /// the caller can tell JS which rows just vanished from under it.
+  ///
+  /// Protected clips are counted against the budget but never deleted: a user
+  /// who locks 5 GB of footage has told us to stop reclaiming space, and
+  /// quietly overriding that would be worse than running out.
+  func enforceBudget() -> [String] {
+    guard let urls = try? fm.contentsOfDirectory(
+      at: savedRoot,
+      includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
+    ) else { return [] }
+
+    let clips = urls.filter { $0.pathExtension == "mp4" }
+    var totalBytes = clips.reduce(Int64(0)) { $0 + fileSize(at: $1) }
+    var count = clips.count
+    var removed: [String] = []
+
+    let candidates = clips
+      .filter { !isProtected($0) }
+      .sorted { modifiedAt($0) < modifiedAt($1) }
+
+    for url in candidates {
+      if totalBytes <= Self.savedStorageBudgetBytes, count <= Self.savedClipCountLimit { break }
+      let size = fileSize(at: url)
+      guard (try? fm.removeItem(at: url)) != nil else { continue }
+      try? fm.removeItem(at: metadataURL(for: url))
+      try? fm.removeItem(at: protectionMarkerURL(for: url))
+      totalBytes -= size
+      count -= 1
+      removed.append(url.deletingPathExtension().lastPathComponent)
+    }
+    return removed
+  }
+
+  /// Count and bytes of the saved directory, without opening a single file.
+  ///
+  /// The gallery's clip list needs a duration per clip, which costs an AVAsset
+  /// load each; the storage figures do not. Reusing the clip list here would
+  /// put ~50 container reads on the save path, every save, while the buffer is
+  /// still recording.
+  func savedFootprint() -> (count: Int, bytes: Int64) {
+    guard let urls = try? fm.contentsOfDirectory(
+      at: savedRoot, includingPropertiesForKeys: [.fileSizeKey]
+    ) else { return (0, 0) }
+    let clips = urls.filter { $0.pathExtension == "mp4" }
+    return (clips.count, clips.reduce(Int64(0)) { $0 + fileSize(at: $1) })
+  }
+
   func storageStatus(savedClipCount: Int, savedBytes: Int64) -> StorageStatus {
     let values = try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
     let free = Int64(values?.volumeAvailableCapacityForImportantUsage ?? 0)
@@ -67,6 +140,34 @@ final class StorageManager {
   func fileSize(at url: URL) -> Int64 {
     let attrs = try? fm.attributesOfItem(atPath: url.path)
     return (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+  }
+
+  /// The container is the only honest source for how long a saved clip runs:
+  /// the merge concatenates a variable number of segments and the last one is
+  /// cut short by the Save itself, so no arithmetic over the config predicts
+  /// it. A file that cannot be read reports 0 rather than guessing.
+  ///
+  /// AVFoundation's property loading is async-only from iOS 16 on, while the
+  /// callers here are synchronous. Blocking is safe: both run off the main
+  /// thread, on the Expo module's own async queue.
+  func durationSec(at url: URL) -> Double {
+    let asset = AVURLAsset(url: url)
+    let semaphore = DispatchSemaphore(value: 0)
+    var seconds = 0.0
+    Task {
+      if let duration = try? await asset.load(.duration) {
+        let value = CMTimeGetSeconds(duration)
+        if value.isFinite, value > 0 { seconds = value }
+      }
+      semaphore.signal()
+    }
+    semaphore.wait()
+    return seconds
+  }
+
+  func modifiedAt(_ url: URL) -> Date {
+    (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+      ?? Date.distantPast
   }
 
   @discardableResult

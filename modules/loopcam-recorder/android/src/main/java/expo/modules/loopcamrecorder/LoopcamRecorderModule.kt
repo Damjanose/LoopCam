@@ -25,7 +25,6 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
 
   private val storage by lazy { StorageManager(context) }
   private val cameraRecorder by lazy { CameraXSegmentRecorder(context) }
-  private val protectedIds = mutableSetOf<String>()
 
   override fun definition() = ModuleDefinition {
     Name("LoopcamRecorder")
@@ -69,8 +68,9 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
       } else {
         emptyArray()
       }
-      // TODO(phase-2): also prompt for ACCESS_FINE_LOCATION when GPS tagging is
-      // on, and deep-link OEM battery-whitelist screens on first run (§10).
+      // Location is deliberately not requested: the GPS sidecar (§7.1) is not in
+      // this release, and a permission the app never uses is a Play policy
+      // problem. Re-add ACCESS_FINE_LOCATION here together with the sidecar.
       val permissionsManager = appContext.permissions
       if (permissionsManager == null) {
         promise.resolve(false)
@@ -91,7 +91,7 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
         if (service == null) {
           promise.reject(
             "ERR_SERVICE_START",
-            "The LoopCam recording service did not start",
+            "The DashCam recording service did not start",
             null,
           )
           return@startAndAwait
@@ -138,20 +138,24 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
 
     AsyncFunction("deleteSavedClip") { id: String ->
       savedClips().firstOrNull { it.id == id }?.let { clip ->
-        File(URI(clip.uri)).delete()
+        val video = File(URI(clip.uri))
+        // The marker goes with its clip; an orphan would silently protect the
+        // next clip that happened to land on the same timestamped name.
+        storage.protectionMarkerFor(video).delete()
+        video.delete()
         clip.metadataUri?.let { File(URI(it)).delete() }
       }
     }
 
     AsyncFunction("setClipProtected") { id: String, isProtected: Boolean ->
-      // TODO(phase-4): persist this alongside the sidecar so it survives a
-      // restart; an in-memory set is enough to wire the UI for now.
-      if (isProtected) protectedIds.add(id) else protectedIds.remove(id)
+      savedClips().firstOrNull { it.id == id }?.let { clip ->
+        storage.setProtected(File(URI(clip.uri)), isProtected)
+      }
     }
 
     AsyncFunction("getStorageStatus") {
-      val clips = savedClips()
-      storage.storageStatus(clips.size, clips.sumOf { it.sizeBytes }).toMap()
+      val (count, bytes) = storage.savedFootprint()
+      storage.storageStatus(count, bytes).toMap()
     }
 
     AsyncFunction("cleanupOrphanedClips") {
@@ -180,7 +184,18 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
     sendEvent("onClipFinished", status.toMap())
   }
 
-  override fun onSaved(clip: SavedClip) = sendEvent("onSaved", clip.toMap())
+  override fun onSaved(clip: SavedClip) {
+    sendEvent("onSaved", clip.toMap())
+
+    // A save is the only moment saved storage grows, so the only moment the
+    // budget can be breached (§7.2).
+    val deleted = storage.enforceBudget()
+    val (count, bytes) = storage.savedFootprint()
+    val status = storage.storageStatus(count, bytes)
+    if (deleted.isNotEmpty() || status.lowSpaceWarning) {
+      sendEvent("onStorageWarning", status.toMap() + mapOf("deletedClipIds" to deleted))
+    }
+  }
 
   override fun onError(code: RecorderErrorCode, message: String) =
     sendEvent("onError", mapOf("code" to code.jsValue, "message" to message))
@@ -267,7 +282,7 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
         createdAtMs = file.lastModified(),
         durationSec = durationSecOf(file),
         sizeBytes = file.length(),
-        isProtected = protectedIds.contains(file.nameWithoutExtension),
+        isProtected = storage.isProtected(file),
         trigger = SaveTrigger.MANUAL,
       )
     }

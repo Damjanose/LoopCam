@@ -33,7 +33,19 @@ const SEGMENTS = 28;
  * controls that need aim.
  */
 export default function RecorderScreen({ onOpenSaved }: { onOpenSaved: () => void }) {
-  const { status, isRecording, bufferFill, lastSaved, error, busy, config, play, stop, save } =
+  const {
+    status,
+    isRecording,
+    bufferFill,
+    lastSaved,
+    error,
+    storageWarning,
+    busy,
+    config,
+    play,
+    stop,
+    save,
+  } =
     useRecorder();
 
   return (
@@ -94,10 +106,18 @@ export default function RecorderScreen({ onOpenSaved }: { onOpenSaved: () => voi
         </View>
 
         <View style={styles.footer}>
-          {(error || lastSaved) && (
-            <View style={[styles.toast, error ? styles.toastError : styles.toastOk]}>
-              <Text style={[styles.toastLabel, error ? styles.toastLabelError : styles.toastLabelOk]}>
-                {error ?? `Saved ${lastSaved?.id}`}
+          {/* One slot, so a failure is never buried under a success. A storage
+              sweep outranks the save that triggered it: the clip did save, but
+              the part the user needs to know is that older ones just went. */}
+          {(error || storageWarning || lastSaved) && (
+            <View
+              style={[styles.toast, error || storageWarning ? styles.toastError : styles.toastOk]}>
+              <Text
+                style={[
+                  styles.toastLabel,
+                  error || storageWarning ? styles.toastLabelError : styles.toastLabelOk,
+                ]}>
+                {error ?? storageWarning ?? `Saved ${lastSaved?.id}`}
               </Text>
             </View>
           )}
