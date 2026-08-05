@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreImage
 import Foundation
 
 /// The capture primitive the segment loop drives: "record exactly one clip to
@@ -241,6 +242,10 @@ private final class ClipWriter {
   private let startedAt = Date()
   private let writer: AVAssetWriter
   private let videoInput: AVAssetWriterInput
+  /// Video goes through the adaptor rather than the input directly: the
+  /// timestamp is composited onto every frame, so what reaches the writer is a
+  /// pixel buffer we drew, not the one the camera handed over.
+  private let videoAdaptor: AVAssetWriterInputPixelBufferAdaptor
   private let audioInput: AVAssetWriterInput?
   private let onFinished: (Clip) -> Void
   private let onError: (Error) -> Void
@@ -272,6 +277,23 @@ private final class ClipWriter {
       throw RecorderError.cameraUnavailable("the writer rejected the video input")
     }
     writer.add(videoInput)
+
+    // 32BGRA because that is what CoreImage renders into without a conversion
+    // pass. Dimensions come from the settings the output itself recommended, so
+    // the pool matches the frames the camera is actually delivering.
+    var attributes: [String: Any] = [
+      kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+    ]
+    if let width = videoSettings[AVVideoWidthKey] as? Int,
+      let height = videoSettings[AVVideoHeightKey] as? Int
+    {
+      attributes[kCVPixelBufferWidthKey as String] = width
+      attributes[kCVPixelBufferHeightKey as String] = height
+    }
+    videoAdaptor = AVAssetWriterInputPixelBufferAdaptor(
+      assetWriterInput: videoInput,
+      sourcePixelBufferAttributes: attributes
+    )
 
     if let audioSettings {
       let input = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
@@ -306,11 +328,58 @@ private final class ClipWriter {
     guard let input = isVideo ? videoInput : audioInput, input.isReadyForMoreMediaData else {
       return
     }
-    input.append(sampleBuffer)
 
     if isVideo {
+      appendVideo(sampleBuffer, at: pts)
       let duration = CMSampleBufferGetDuration(sampleBuffer)
       lastPTS = duration.isNumeric ? pts + duration : pts
+    } else {
+      input.append(sampleBuffer)
+    }
+  }
+
+  /// Composites the timestamp onto the frame on its way to the writer.
+  ///
+  /// Every failure here falls back to appending the untouched frame: footage
+  /// without a stamp is worth incomparably more than a hole in the buffer, and
+  /// the recorder must not stop recording because a plate would not rasterise.
+  private func appendVideo(_ sampleBuffer: CMSampleBuffer, at pts: CMTime) {
+    guard let source = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+      videoInput.append(sampleBuffer)
+      return
+    }
+    let size = CGSize(
+      width: CVPixelBufferGetWidth(source),
+      height: CVPixelBufferGetHeight(source)
+    )
+    let renderer = WatermarkRenderer.shared
+    guard
+      // The pool only exists once writing has started, which `init` does last.
+      let pool = videoAdaptor.pixelBufferPool,
+      // Wall clock read here rather than derived from the PTS: the two agree to
+      // within the pipeline's own latency, and the frame's own clock is on a
+      // timebase with no defined relationship to the calendar.
+      let overlay = renderer.overlay(for: Date(), pixelSize: size)
+    else {
+      videoInput.append(sampleBuffer)
+      return
+    }
+
+    var destination: CVPixelBuffer?
+    guard
+      CVPixelBufferPoolCreatePixelBuffer(nil, pool, &destination) == kCVReturnSuccess,
+      let destination
+    else {
+      videoInput.append(sampleBuffer)
+      return
+    }
+
+    renderer.context.render(
+      overlay.composited(over: CIImage(cvPixelBuffer: source)),
+      to: destination
+    )
+    if !videoAdaptor.append(destination, withPresentationTime: pts) {
+      videoInput.append(sampleBuffer)
     }
   }
 

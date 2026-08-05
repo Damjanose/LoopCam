@@ -27,6 +27,9 @@ dependencies {
   implementation "androidx.camera:camera-lifecycle:$cameraxVersion"
   implementation "androidx.camera:camera-video:$cameraxVersion"
   implementation "androidx.camera:camera-view:$cameraxVersion"
+  // The burned-in timestamp: OverlayEffect composites it on the GPU, into the
+  // preview and the encoded stream at once.
+  implementation "androidx.camera:camera-effects:$cameraxVersion"
 
   // §5.1 — LifecycleService, so the foreground service can own the camera binding.
   implementation "androidx.lifecycle:lifecycle-service:2.8.7"

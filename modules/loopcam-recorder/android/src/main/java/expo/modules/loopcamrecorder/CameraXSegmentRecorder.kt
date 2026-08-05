@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraState
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
@@ -59,6 +60,15 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
    * session's own, owned by the service, and must survive exactly that.
    */
   private var standbyPreview: Preview? = null
+
+  /**
+   * The burned-in clock, one instance per binding: the session's targets the
+   * encoder as well as the screen, standby's only the screen. Closed with the
+   * binding it belongs to, because an effect outliving its use cases holds a
+   * GPU surface and a thread for a picture nobody is watching.
+   */
+  private var sessionWatermark: WatermarkOverlay? = null
+  private var standbyWatermark: WatermarkOverlay? = null
   private var activeRecording: Recording? = null
   private var stateSource: LiveData<CameraState>? = null
   private var stateObserver: Observer<CameraState>? = null
@@ -87,6 +97,8 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
     // against a VideoCapture whose camera is still opening. Failures propagate
     // instead of being logged, so Play reports "camera unavailable" rather than
     // silently idling.
+    val watermark = WatermarkOverlay(WatermarkOverlay.SESSION_TARGETS)
+
     val latch = CountDownLatch(1)
     var failure: Throwable? = null
     mainExecutor.execute {
@@ -96,7 +108,18 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
         // stale use case that `stopPreview` later unbinds — taking the live
         // session's picture down with it.
         standbyPreview = null
-        val camera = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
+        standbyWatermark?.close()
+        standbyWatermark = null
+        // One group rather than loose use cases, because an effect can only be
+        // attached to a group. The timestamp therefore reaches the encoder and
+        // the screen from the same composite — what the driver sees framed is
+        // what the file will show.
+        val group = UseCaseGroup.Builder()
+          .addUseCase(preview)
+          .addUseCase(capture)
+          .addEffect(watermark.effect)
+          .build()
+        val camera = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, group)
         // Whichever preview view is mounted now — or mounts later — gets this
         // session's frames, without either side owning the other (§3.1).
         CameraPreviewBus.subscribe { surfaceProvider -> preview.setSurfaceProvider(surfaceProvider) }
@@ -131,12 +154,17 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
 
     if (!latch.await(BIND_TIMEOUT_SEC, TimeUnit.SECONDS)) {
       mainExecutor.execute { stopWatchingState() }
+      watermark.close()
       throw IllegalStateException("Timed out waiting for the camera to open")
     }
-    failure?.let { throw IllegalStateException(it.message ?: "Could not open the camera", it) }
+    failure?.let {
+      watermark.close()
+      throw IllegalStateException(it.message ?: "Could not open the camera", it)
+    }
 
     videoCapture = capture
     previewUseCase = preview
+    sessionWatermark = watermark
   }
 
   /**
@@ -239,12 +267,24 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
       // Binding a second preview over it would fight for the same surface.
       if (videoCapture != null) return@addListener
       standbyPreview?.let { provider.unbind(it) }
+      standbyWatermark?.close()
+      standbyWatermark = null
       val preview = Preview.Builder().build()
-      runCatching {
-        provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview)
+      // Standby is stamped too: the point of the live viewfinder is to show
+      // what a recording would look like, and an unstamped one would move the
+      // clock's arrival to the moment Play is pressed.
+      val watermark = WatermarkOverlay(WatermarkOverlay.PREVIEW_TARGETS)
+      val bound = runCatching {
+        val group = UseCaseGroup.Builder()
+          .addUseCase(preview)
+          .addEffect(watermark.effect)
+          .build()
+        provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, group)
         CameraPreviewBus.subscribe { surfaceProvider -> preview.setSurfaceProvider(surfaceProvider) }
         standbyPreview = preview
+        standbyWatermark = watermark
       }
+      if (bound.isFailure) watermark.close()
     }, mainExecutor)
   }
 
@@ -255,6 +295,8 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
       standbyPreview = null
       if (videoCapture == null) CameraPreviewBus.subscribe(null)
       cameraProvider?.unbind(preview)
+      standbyWatermark?.close()
+      standbyWatermark = null
     }
   }
 
@@ -271,6 +313,12 @@ class CameraXSegmentRecorder(private val context: Context) : SegmentRecorder {
       CameraPreviewBus.subscribe(null)
       standbyPreview = null
       cameraProvider?.unbindAll()
+      // After the unbind, never before: an effect closed while its use cases
+      // are still bound pulls the surface out from under the pipeline.
+      sessionWatermark?.close()
+      sessionWatermark = null
+      standbyWatermark?.close()
+      standbyWatermark = null
     }
   }
 

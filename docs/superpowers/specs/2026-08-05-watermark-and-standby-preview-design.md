@@ -42,7 +42,9 @@ flag; if a toggle is wanted later it is one boolean and one branch.
 └─────────────────────────┘
 ```
 
-- Format `yyyy-MM-dd HH:mm:ss`, device local time zone, 24-hour, zero-padded.
+- Format `dd/MM/yyyy HH:mm:ss`, device local time zone, 24-hour, zero-padded.
+  (Was `yyyy-MM-dd` when this was written; changed to match the on-screen HUD
+  clock, so the viewfinder and the footage read identically.)
   Fixed pattern in both native layers — not a locale-dependent formatter, whose
   width would jump between frames and whose meaning would be ambiguous in a
   dispute.
