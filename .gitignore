@@ -52,6 +52,7 @@ play-service-account.json
 
 # debug
 npm-debug.*
+pnpm-debug.*
 yarn-debug.*
 yarn-error.*
 

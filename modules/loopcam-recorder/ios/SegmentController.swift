@@ -48,6 +48,19 @@ final class SegmentController {
       for evicted in self.buffer.resize(to: newConfig.maxClips) {
         try? FileManager.default.removeItem(at: evicted.url)
       }
+      // The speed unit reaches the compositor here rather than at the next
+      // prepare(): it changes what the next frame draws and nothing else, so
+      // making the user stop recording to switch to mph would be theatre.
+      self.recorder.applyLiveConfig(newConfig)
+      // `start` is idempotent and returns early when tagging is off, so this
+      // covers a toggle in either direction mid-drive: switching it on begins
+      // tracking now rather than at the next Play, and switching it off stops
+      // the client inside `configure`.
+      if self.state == .recording {
+        LocationTracker.shared.start(config: newConfig)
+      } else {
+        LocationTracker.shared.configure(newConfig)
+      }
       self.emitState()
     }
   }
@@ -73,10 +86,16 @@ final class SegmentController {
       self.state = .recording
       self.emitState()
 
+      // Before prepare(), not after: the receiver takes 5–30 s to reach a first
+      // fix from cold, and every second of that head start is a second of
+      // footage that carries a real speed instead of `--`.
+      LocationTracker.shared.start(config: self.config)
+
       do {
         try self.recorder.prepare(config: self.config)
         self.startNextClip()
       } catch {
+        LocationTracker.shared.stop()
         self.state = .idle
         self.emitState()
         self.fail(.cameraUnavailable, error)
@@ -94,6 +113,8 @@ final class SegmentController {
       self.pendingBoundary?.cancel()
       self.recorder.stopClip(discard: true)
       self.recorder.teardown()
+      // STOP discards the buffer, so the samples describing it are equally dead.
+      LocationTracker.shared.stop()
       for clip in self.buffer.drain() {
         try? FileManager.default.removeItem(at: clip.url)
       }
@@ -153,6 +174,7 @@ final class SegmentController {
     queue.async {
       self.pendingBoundary?.cancel()
       self.recorder.teardown()
+      LocationTracker.shared.stop()
     }
   }
 

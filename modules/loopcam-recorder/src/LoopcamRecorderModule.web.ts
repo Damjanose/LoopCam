@@ -1,8 +1,11 @@
 import { registerWebModule, NativeModule } from 'expo';
 
+import { FALLBACK_CAPABILITIES } from './capabilities';
 import { DEFAULT_CONFIG, maxClipsFor } from './config';
 import type {
   BufferStatus,
+  CameraCapabilities,
+  LocationStatus,
   LoopcamRecorderEvents,
   RecorderConfig,
   SavedClip,
@@ -28,9 +31,30 @@ class LoopcamRecorderModule extends NativeModule<LoopcamRecorderEvents> {
     return this.config;
   }
 
+  // Back-only, like the stubs above: web renders the settings shell so the
+  // rows can be laid out, and there is no capture session to probe.
+  getCapabilities(): CameraCapabilities {
+    return FALLBACK_CAPABILITIES;
+  }
+
   async requestPermissions(): Promise<boolean> {
     return false;
   }
+
+  hasPermissions(): boolean {
+    return false;
+  }
+
+  // There is no recording session on web, so there is nothing to tag.
+  getLocationStatus(): LocationStatus {
+    return 'disabled';
+  }
+
+  // Not `unsupported()`: the preview is decoration, and a screen that merely
+  // has nothing to show must still render on web.
+  async startPreview(): Promise<void> {}
+
+  async stopPreview(): Promise<void> {}
 
   async start(): Promise<BufferStatus> {
     return unsupported();

@@ -31,15 +31,16 @@ class LoopcamRecorderView(context: Context, appContext: AppContext) :
   private val surfaceProvider: Preview.SurfaceProvider get() = previewView.surfaceProvider
 
   init {
+    // No view-level horizontal flip for the front camera. `PreviewView` already
+    // decides the display orientation for the lens it is fed, and a second flip
+    // on top of that is what left the front viewfinder reversed — it also
+    // mirrors everything drawn into the preview stream, which would move the
+    // front inset to the wrong corner. The file is never mirrored either way
+    // (VideoCapture is left at MIRROR_MODE_OFF).
     previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
     // COMPATIBLE (TextureView) rather than PERFORMANCE: the preview sits under a
     // React-managed overlay, and a SurfaceView would punch through it.
     previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-  }
-
-  fun setLens(lens: String) {
-    // TODO(phase-1): switch CameraSelector on the live session; front-facing is
-    // only meaningful once multi-camera (§8, v2) lands.
   }
 
   fun setResizeMode(mode: String) {

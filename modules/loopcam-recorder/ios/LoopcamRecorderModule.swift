@@ -26,6 +26,14 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
     Events("onStateChange", "onClipFinished", "onSaved", "onStorageWarning", "onError")
 
     OnCreate {
+      // Before anything reads the config: the controller starts on the type's
+      // defaults, and a Play issued before JS has pushed anything — a Lock
+      // Screen tap, a relaunch — must use the camera the user actually chose.
+      let stored = ConfigStore.load()
+      self.controller.configure(stored)
+      // So `getLocationStatus` can answer "disabled" before the first Play,
+      // rather than reporting a permission problem the user has not got.
+      LocationTracker.shared.configure(stored)
       // §7.2 — a temp session that survived a crash is orphaned by definition.
       self.storage.cleanupOrphanedSessions()
       // §6 — needed for the low-battery auto-save-and-stop threshold.
@@ -43,6 +51,10 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
     }
 
     AsyncFunction("configure") { (config: RecorderConfig) in
+      // Persisted as well as applied, so the choice survives a relaunch. The
+      // controller's copy alone would reset to the type's defaults on every
+      // cold start, which is not a settings screen.
+      ConfigStore.save(config)
       self.controller.configure(config)
     }
 
@@ -50,15 +62,62 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
       self.controller.currentConfig.asDictionary()
     }
 
+    Function("getCapabilities") {
+      CameraProbe.capabilities()
+    }
+
     AsyncFunction("requestPermissions") { (promise: Promise) in
-      // Location is deliberately not requested: the GPS sidecar (§7.1) is not
-      // in this release, and a purpose string the app never exercises is an
-      // App Review problem. Re-add CoreLocation here together with the sidecar.
       AVCaptureDevice.requestAccess(for: .video) { videoGranted in
         AVCaptureDevice.requestAccess(for: .audio) { audioGranted in
+          // Asked at the same moment as camera and mic, and deliberately not
+          // gating the promise: a driver who refuses location still gets a
+          // working dashcam, one whose footage stamps `--` where the speed
+          // would be. Asking here rather than at Play also keeps the system
+          // dialog off the screen of someone who has just started recording,
+          // quite possibly while already moving.
+          LocationTracker.shared.requestAuthorization()
           promise.resolve(videoGranted && audioGranted)
         }
       }
+    }
+
+    /// Whether recording could start right now without a prompt. Synchronous
+    /// and side-effect free on purpose: it is asked on mount to decide whether
+    /// the viewfinder may light up, and a screen opening is not the moment to
+    /// throw a system dialog at someone who has not asked for anything yet.
+    Function("hasPermissions") {
+      AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+        && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
+
+    /// Why the burned-in speed is reading `--`, for Settings to explain.
+    ///
+    /// A permanently blank speed field has several quite different causes — no
+    /// lock yet, a tunnel, a refused permission, precise location switched off
+    /// — and on a screen the driver only looks at while parked, guessing which
+    /// is not something to leave to them.
+    Function("getLocationStatus") {
+      LocationTracker.shared.status().rawValue
+    }
+
+    /// Light the viewfinder without recording.
+    ///
+    /// On iOS this is the ordinary capture session with no clip open against
+    /// it: `prepare` configures the inputs and publishes to the preview bus,
+    /// and nothing reaches disk until `startClip`. So standby costs a running
+    /// session and no files — which is why there is no separate preview path
+    /// here the way there is on Android.
+    AsyncFunction("startPreview") {
+      // Not fatal: a camera that will not open leaves the screen dark, which is
+      // what it would have been anyway. Play is where that has to be reported,
+      // because that is where it costs footage.
+      try? self.recorder.prepare(config: self.controller.currentConfig)
+    }
+
+    AsyncFunction("stopPreview") {
+      // A live session's own preview is not this function's to take down.
+      guard self.controller.status.state == .idle else { return }
+      self.recorder.teardown()
     }
 
     /// PLAY.
@@ -130,9 +189,9 @@ public class LoopcamRecorderModule: Module, SegmentControllerDelegate {
     }
 
     View(LoopcamRecorderView.self) {
-      Prop("lens") { (view: LoopcamRecorderView, lens: String) in
-        view.setLens(lens)
-      }
+      // No `lens` prop: which camera records is `RecorderConfig.cameraMode`,
+      // owned by the controller. A view prop that also selected it could only
+      // ever be the second, disagreeing source of truth.
       Prop("resizeMode") { (view: LoopcamRecorderView, mode: String) in
         view.setResizeMode(mode)
       }

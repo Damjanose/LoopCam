@@ -2,6 +2,7 @@
   "name": "loopcam",
   "version": "1.0.0",
   "main": "index.ts",
+  "packageManager": "pnpm@10.28.2",
   "dependencies": {
     "@bacons/apple-targets": "^5.0.0",
     "expo": "~57.0.10",

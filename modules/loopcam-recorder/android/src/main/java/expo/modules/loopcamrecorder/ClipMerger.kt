@@ -8,6 +8,8 @@ import android.media.MediaMuxer
 import android.util.Log
 import java.io.File
 import java.nio.ByteBuffer
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * §4 — Save concatenates the frozen window into one permanent file.
@@ -39,8 +41,10 @@ class ClipMerger(private val storage: StorageManager) {
       // so this must match what listSavedClips/deleteSavedClip look up.
       id = destination.nameWithoutExtension,
       uri = destination.toURI().toString(),
-      // Only advertise a sidecar that is actually on disk; the phase-5 writer is
-      // still a no-op and a dangling URI would be worse than none.
+      // Only advertise a sidecar that is actually on disk. The writer swallows
+      // its own failures rather than losing the merged clip over them, so this
+      // check is the one thing standing between a JSON file that never got
+      // written and a URI pointing at nothing.
       metadataUri = if (sidecar.exists()) sidecar.toURI().toString() else null,
       createdAtMs = System.currentTimeMillis(),
       durationSec = clips.sumOf { it.durationSec },
@@ -209,11 +213,58 @@ class ClipMerger(private val storage: StorageManager) {
   /**
    * §7.1 — GPS/speed/timestamp sidecar written next to the saved clip.
    *
-   * TODO(phase-5): serialize the location samples collected during the window
-   * (FusedLocationProviderClient at 1 fix / 2–3 s, §6) as JSON.
+   * Mirrored byte for byte by `ios/ClipMerger.swift`: a sidecar that described
+   * the same drive differently depending on the phone it was recorded on would
+   * be worth very little as evidence.
+   *
+   * Failures are swallowed rather than propagated. The merged MP4 is already on
+   * disk and is the thing the user pressed Save for; losing it because a
+   * few kilobytes of JSON would not write would be the wrong trade. The
+   * `fileExists` check in [merge] is what keeps a failure here from being
+   * advertised as a sidecar that isn't there.
    */
   fun writeMetadataSidecar(destination: File, clips: List<Clip>) {
-    // TODO(phase-5)
+    try {
+      // The merged window's own time range. Samples outside it belong to
+      // footage that was evicted from the ring and must not appear — a sidecar
+      // is a description of *this* file, not of the drive around it.
+      val first = clips.first()
+      val last = clips.last()
+      val startedAtMs = first.startedAtMs
+      val endedAtMs = last.startedAtMs + (last.durationSec * 1000).toLong()
+
+      val samples = JSONArray()
+      for (sample in LocationTracker.samplesBetween(startedAtMs, endedAtMs)) {
+        samples.put(
+          JSONObject().apply {
+            put("t", sample.timestampMs)
+            put("lat", sample.latitude)
+            put("lon", sample.longitude)
+            // JSONObject.NULL, not omission: a gap in the array and a
+            // known-unknown sample are different facts about the drive.
+            put("speed", sample.speedMps ?: JSONObject.NULL)
+            put("acc", sample.accuracyM)
+            if (sample.derived) put("derived", true)
+          }
+        )
+      }
+
+      val document = JSONObject().apply {
+        put("version", SIDECAR_VERSION)
+        put("clipId", destination.nameWithoutExtension)
+        put("startedAtMs", startedAtMs)
+        put("durationSec", clips.sumOf { it.durationSec })
+        // Always SI in the file, whatever the watermark displays. A sidecar is
+        // data; the display unit is a preference, and baking a preference into
+        // stored evidence means a file that can be misread later.
+        put("speedUnit", "mps")
+        put("samples", samples)
+      }
+
+      storage.metadataFileFor(destination).writeText(document.toString())
+    } catch (t: Throwable) {
+      Log.w(TAG, "Could not write the metadata sidecar for ${destination.name}", t)
+    }
   }
 
   /** Output track indices plus the read buffer they need. */
@@ -225,6 +276,12 @@ class ClipMerger(private val storage: StorageManager) {
 
   private companion object {
     const val TAG = "LoopCam/Merge"
+
+    /**
+     * Sidecar schema version. Bumped when a field changes meaning, so a reader
+     * handed a file from a future build can tell rather than guess.
+     */
+    const val SIDECAR_VERSION = 1
 
     /** Floor for the sample buffer when a format under-reports its input size. */
     const val MIN_BUFFER_BYTES = 2 * 1024 * 1024

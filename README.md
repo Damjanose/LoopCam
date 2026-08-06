@@ -51,14 +51,19 @@ buffer rules has one obvious counterpart on the other platform.
 
 ## Running
 
+This project uses **pnpm** (see `packageManager` in `package.json`; `corepack
+enable` picks up the right version). `.npmrc` pins `node-linker=hoisted` —
+Metro, Gradle autolinking and CocoaPods all expect a flat `node_modules`, so do
+not switch that to pnpm's default symlinked layout.
+
 ```bash
-npm install
-npx expo prebuild            # regenerate android/ and ios/
-npx expo run:android         # device recommended — the emulator's camera is fake
-npx expo run:ios
+pnpm install
+pnpm expo prebuild            # regenerate android/ and ios/
+pnpm expo run:android         # device recommended — the emulator's camera is fake
+pnpm expo run:ios
 ```
 
-`npx expo start` alone is not enough: the recorder is a native module, so it
+`pnpm expo start` alone is not enough: the recorder is a native module, so it
 needs a dev build, not Expo Go.
 
 ## Signing
@@ -79,7 +84,7 @@ export LOOPCAM_KEYSTORE_PASSWORD=…   # store password
 export LOOPCAM_KEY_ALIAS=…           # alias of the key inside the store
 export LOOPCAM_KEY_PASSWORD=…        # key password; defaults to the store password
 
-npx expo prebuild -p android
+pnpm expo prebuild -p android
 cd android && ./gradlew bundleRelease   # → app/build/outputs/bundle/release/*.aab
 ```
 

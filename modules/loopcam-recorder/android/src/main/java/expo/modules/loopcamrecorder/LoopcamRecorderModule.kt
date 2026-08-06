@@ -1,9 +1,12 @@
 package expo.modules.loopcamrecorder
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.LifecycleOwner
 import expo.modules.interfaces.permissions.PermissionsStatus
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.Exceptions
@@ -25,6 +28,8 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
 
   private val storage by lazy { StorageManager(context) }
   private val cameraRecorder by lazy { CameraXSegmentRecorder(context) }
+  private val configStore by lazy { ConfigStore(context) }
+  private val cameraProbe by lazy { CameraProbe(context) }
 
   override fun definition() = ModuleDefinition {
     Name("LoopcamRecorder")
@@ -33,9 +38,17 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
 
     OnCreate {
       live = this@LoopcamRecorderModule
+      // The tracker outlives every Activity — the foreground service keeps
+      // recording with the app swiped away — so it is given the application
+      // context here, once, rather than reaching for whatever is current.
+      LocationTracker.attach(context)
+      LocationTracker.configure(configStore.load())
       // §7.2 — a temp session that survived a process death is orphaned by
       // definition; sweep before anything else touches the buffer.
       storage.cleanupOrphanedSessions()
+      // Kicked off here so the answer is ready by the time the first render
+      // asks for it; the probe itself runs on its own thread.
+      cameraProbe
     }
 
     OnDestroy {
@@ -49,11 +62,24 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
     }
 
     AsyncFunction("configure") { config: RecorderConfig ->
+      // Persisted as well as applied. The service can outlive the JS side
+      // (§5.1), so the stored copy is what a cold start reads — a config that
+      // only lived in the controller would reset on every launch.
+      configStore.save(config)
       requireController().configure(config)
     }
 
+    /**
+     * The live config if there is one, else whatever was last saved. Not the
+     * type's defaults: those would tell a freshly-launched app it is set to the
+     * back camera at 1080p regardless of what the user actually chose.
+     */
     Function("getConfig") {
-      (controller?.currentConfig() ?: RecorderConfig()).toMap()
+      (controller?.currentConfig() ?: configStore.load()).toMap()
+    }
+
+    Function("getCapabilities") {
+      cameraProbe.capabilities()
     }
 
     AsyncFunction("requestPermissions") { promise: Promise ->
@@ -62,15 +88,25 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
       // but a refusal must not block the drive. FOREGROUND_SERVICE_CAMERA is
       // install-time, not runtime — asking for it here would resolve false and
       // lock Play out entirely.
-      val required = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
-      val optional = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        arrayOf(Manifest.permission.POST_NOTIFICATIONS)
-      } else {
-        emptyArray()
-      }
-      // Location is deliberately not requested: the GPS sidecar (§7.1) is not in
-      // this release, and a permission the app never uses is a Play policy
-      // problem. Re-add ACCESS_FINE_LOCATION here together with the sidecar.
+      val required = REQUIRED_PERMISSIONS
+      // Asked at the same moment as camera and mic, and optional for the same
+      // reason POST_NOTIFICATIONS is: a driver who refuses location still gets a
+      // working dashcam, one whose footage stamps `--` where the speed would be.
+      // Requesting it here rather than at Play also keeps the system dialog off
+      // the screen of someone who has just started recording, quite possibly
+      // while already moving.
+      val optional = buildList {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+          add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        // Coarse alongside fine because Android 12+ shows the user a choice
+        // between them, and asking for fine alone offers no approximate option
+        // at all. A coarse-only grant is detected by LocationTracker and
+        // reported through getLocationStatus rather than silently burning in
+        // numbers from network positioning.
+        add(Manifest.permission.ACCESS_FINE_LOCATION)
+        add(Manifest.permission.ACCESS_COARSE_LOCATION)
+      }.toTypedArray()
       val permissionsManager = appContext.permissions
       if (permissionsManager == null) {
         promise.resolve(false)
@@ -79,6 +115,49 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
           promise.resolve(required.all { result[it]?.status == PermissionsStatus.GRANTED })
         }, *(required + optional))
       }
+    }
+
+    /**
+     * Whether recording could start right now without a prompt. Synchronous and
+     * side-effect free on purpose: it is asked on mount to decide whether the
+     * viewfinder may light up, and a screen opening is not the moment to throw a
+     * system dialog at someone who has not asked for anything yet.
+     */
+    Function("hasPermissions") {
+      REQUIRED_PERMISSIONS.all {
+        ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+      }
+    }
+
+    /**
+     * Why the burned-in speed is reading `--`, for Settings to explain.
+     *
+     * A permanently blank speed field has several quite different causes — no
+     * lock yet, a tunnel, a refused permission, an approximate-only grant — and
+     * on a screen the driver only looks at while parked, guessing which is not
+     * something to leave to them.
+     */
+    Function("getLocationStatus") {
+      LocationTracker.status().jsValue
+    }
+
+    /**
+     * Light the viewfinder without recording. No foreground service and no
+     * files — this is the picture only, bound to the Activity so it goes away
+     * with the screen.
+     */
+    AsyncFunction("startPreview") {
+      val owner = appContext.currentActivity as? LifecycleOwner
+        ?: throw Exceptions.MissingActivity()
+      // The stored mode, so the standby picture is laid out the way a recording
+      // would be — including the front-camera inset — rather than only
+      // revealing the layout once Play is pressed.
+      val mode = (controller?.currentConfig() ?: configStore.load()).camera
+      cameraRecorder.startPreview(owner, mode)
+    }
+
+    AsyncFunction("stopPreview") {
+      cameraRecorder.stopPreview()
     }
 
     /**
@@ -163,9 +242,9 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
     }
 
     View(LoopcamRecorderView::class) {
-      Prop("lens") { view: LoopcamRecorderView, lens: String ->
-        view.setLens(lens)
-      }
+      // No `lens` prop: which camera records is `RecorderConfig.cameraMode`,
+      // owned by the controller. A view prop that also selected it could only
+      // ever be the second, disagreeing source of truth.
       Prop("resizeMode") { view: LoopcamRecorderView, mode: String ->
         view.setResizeMode(mode)
       }
@@ -248,11 +327,17 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
       recorder = cameraRecorder,
       merger = ClipMerger(storage),
       listener = this,
-    ).also { controller = it }
+    ).also {
+      // Seeded from disk, not from the type's defaults: a Play issued before JS
+      // has pushed anything — the notification's action, or a restart — must
+      // record with the camera and tier the user actually chose.
+      it.configure(configStore.load())
+      controller = it
+    }
   }
 
   private fun idleStatus(): BufferStatus {
-    val config = controller?.currentConfig() ?: RecorderConfig()
+    val config = controller?.currentConfig() ?: configStore.load()
     return BufferStatus(
       state = RecorderState.IDLE,
       clipCount = 0,
@@ -310,6 +395,10 @@ class LoopcamRecorderModule : Module(), SegmentController.Listener {
 
   companion object {
     private const val TAG = "LoopCam/Module"
+
+    /** The two that actually gate capture; everything else is a nicety. */
+    private val REQUIRED_PERMISSIONS =
+      arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
 
     /** Shared with [RecordingService] so notification actions hit the live loop. */
     @JvmStatic

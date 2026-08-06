@@ -152,8 +152,16 @@ class RecordingService : LifecycleService() {
    */
   private fun foregroundTypes(): Int {
     var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && granted(Manifest.permission.RECORD_AUDIO)) {
-      types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      if (granted(Manifest.permission.RECORD_AUDIO)) {
+        types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+      }
+      // Fine only. A coarse-only grant carries no usable speed, so the tracker
+      // never starts the client — and claiming a location type for a service
+      // that will not read location is exactly what this narrowing avoids.
+      if (granted(Manifest.permission.ACCESS_FINE_LOCATION)) {
+        types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+      }
     }
     return types
   }

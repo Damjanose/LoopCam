@@ -24,11 +24,13 @@ final class ClipMerger {
 
     let durationSec = try concatenate(clips: clips, destination: destination)
     if config.locationTaggingEnabled {
-      writeMetadataSidecar(for: destination, clips: clips)
+      writeMetadataSidecar(for: destination, clips: clips, durationSec: durationSec)
     }
 
-    // Only advertise a sidecar that is actually on disk: the phase-5 writer is
-    // still a no-op, and a URI pointing at nothing is worse than none at all.
+    // Only advertise a sidecar that is actually on disk. The writer swallows
+    // its own failures rather than losing the merged clip over them, so this
+    // check is the one thing standing between a JSON file that never got
+    // written and a URI pointing at nothing.
     let sidecar = storage.metadataURL(for: destination)
     let hasSidecar = FileManager.default.fileExists(atPath: sidecar.path)
 
@@ -164,9 +166,98 @@ final class ClipMerger {
 
   /// §7.1 — GPS/speed/timestamp sidecar written next to the saved clip.
   ///
-  /// TODO(phase-5): serialize the CoreLocation samples collected during the
-  /// window (1 fix / 2–3 s, §6) as JSON.
-  private func writeMetadataSidecar(for destination: URL, clips: [Clip]) {
-    // TODO(phase-5)
+  /// Mirrors `android/…/ClipMerger.kt` byte for byte: a sidecar that described
+  /// the same drive differently depending on the phone it was recorded on would
+  /// be worth very little as evidence. Note that `Clip.startedAt` is a `Date`
+  /// here and epoch millis on Android — the conversion is what keeps the two
+  /// files identical.
+  ///
+  /// Failures are swallowed rather than propagated. The merged MP4 is already
+  /// on disk and is the thing the user pressed Save for; losing it because a
+  /// few kilobytes of JSON would not write would be the wrong trade.
+  private func writeMetadataSidecar(for destination: URL, clips: [Clip], durationSec: Double) {
+    guard let first = clips.first, let last = clips.last else { return }
+
+    // The merged window's own time range. Samples outside it belong to footage
+    // that was evicted from the ring and must not appear — a sidecar is a
+    // description of *this* file, not of the drive around it.
+    let startedAtMs = first.startedAt.timeIntervalSince1970 * 1000
+    let endedAtMs = last.startedAt.timeIntervalSince1970 * 1000 + last.durationSec * 1000
+
+    let document = SidecarDocument(
+      clipId: destination.deletingPathExtension().lastPathComponent,
+      startedAtMs: startedAtMs,
+      durationSec: durationSec,
+      samples: LocationTracker.shared
+        .samplesBetween(fromMs: startedAtMs, toMs: endedAtMs)
+        .map(SidecarSample.init)
+    )
+
+    do {
+      let encoder = JSONEncoder()
+      // Deterministic output, so a diff between an Android and an iOS sidecar
+      // of the same drive is a difference in the data and not in the encoder.
+      encoder.outputFormatting = [.sortedKeys]
+      try encoder.encode(document).write(to: storage.metadataURL(for: destination))
+    } catch {
+      NSLog(
+        "LoopCam/Merge: could not write the metadata sidecar for "
+          + "\(destination.lastPathComponent) — \(error.localizedDescription)"
+      )
+    }
+  }
+}
+
+/// The sidecar's schema. Field names are the wire format and are matched
+/// exactly by the Kotlin writer.
+private struct SidecarDocument: Encodable {
+  /// Bumped when a field changes meaning, so a reader handed a file from a
+  /// future build can tell rather than guess.
+  let version = 1
+  let clipId: String
+  let startedAtMs: Double
+  let durationSec: Double
+  /// Always SI in the file, whatever the watermark displays. A sidecar is data;
+  /// the display unit is a preference, and baking a preference into stored
+  /// evidence means a file that can be misread later.
+  let speedUnit = "mps"
+  let samples: [SidecarSample]
+}
+
+private struct SidecarSample: Encodable {
+  let t: Double
+  let lat: Double
+  let lon: Double
+  let speed: Double?
+  let acc: Double
+  let derived: Bool
+
+  init(_ sample: SpeedSample) {
+    t = sample.timestampMs
+    lat = sample.latitude
+    lon = sample.longitude
+    speed = sample.speedMps
+    acc = sample.accuracyM
+    derived = sample.derived
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case t, lat, lon, speed, acc, derived
+  }
+
+  /// Hand-written because the synthesized `encode(to:)` uses `encodeIfPresent`
+  /// for an optional and would *omit* `speed` when it is nil. The spec is
+  /// explicit that it must be `null`: a gap in the array and a known-unknown
+  /// sample are different facts about the drive.
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(t, forKey: .t)
+    try container.encode(lat, forKey: .lat)
+    try container.encode(lon, forKey: .lon)
+    try container.encode(speed, forKey: .speed)
+    try container.encode(acc, forKey: .acc)
+    // Absent rather than false on a measured reading, matching Android: the key
+    // exists to flag the exception, not to annotate every ordinary sample.
+    if derived { try container.encode(true, forKey: .derived) }
   }
 }
